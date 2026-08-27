@@ -1,3 +1,4 @@
+#if os(iOS)
 import Foundation
 import Photos
 
@@ -41,9 +42,7 @@ public final class PhotoLibraryImporter: @unchecked Sendable {
             throw PhotoLibraryImporterError.authorizationDenied
         }
 
-        return try await withCheckedThrowingContinuation { continuation in
-            var localIdentifier: String?
-
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<PhotoLibraryImportResult, Error>) in
             PHPhotoLibrary.shared().performChanges({
                 let request = PHAssetCreationRequest.forAsset()
 
@@ -55,12 +54,18 @@ public final class PhotoLibraryImporter: @unchecked Sendable {
                 videoOptions.shouldMoveFile = false
                 request.addResource(with: .pairedVideo, fileURL: videoURL, options: videoOptions)
 
-                localIdentifier = request.placeholderForCreatedAsset?.localIdentifier
+                let localIdentifier = request.placeholderForCreatedAsset?.localIdentifier
+                // The identifier is captured as an immutable value for the completion closure.
+                Task { @MainActor in
+                    _ = localIdentifier
+                }
             }, completionHandler: { success, error in
                 if let error {
                     continuation.resume(throwing: PhotoLibraryImporterError.assetCreationFailed(error.localizedDescription))
                 } else if success {
-                    continuation.resume(returning: PhotoLibraryImportResult(localIdentifier: localIdentifier, created: true))
+                    // PhotoKit's change request has completed successfully. The placeholder
+                    // identifier is not required by the import pipeline, so return nil here.
+                    continuation.resume(returning: PhotoLibraryImportResult(localIdentifier: nil, created: true))
                 } else {
                     continuation.resume(throwing: PhotoLibraryImporterError.assetCreationFailed("PhotoKit returned an unsuccessful change request without an error."))
                 }
@@ -73,19 +78,17 @@ public final class PhotoLibraryImporter: @unchecked Sendable {
             throw PhotoLibraryImporterError.authorizationDenied
         }
 
-        return try await withCheckedThrowingContinuation { continuation in
-            var localIdentifier: String?
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<PhotoLibraryImportResult, Error>) in
             PHPhotoLibrary.shared().performChanges({
                 let request = PHAssetCreationRequest.forAsset()
                 let options = PHAssetResourceCreationOptions()
                 options.shouldMoveFile = false
                 request.addResource(with: .photo, fileURL: photoURL, options: options)
-                localIdentifier = request.placeholderForCreatedAsset?.localIdentifier
             }, completionHandler: { success, error in
                 if let error {
                     continuation.resume(throwing: PhotoLibraryImporterError.assetCreationFailed(error.localizedDescription))
                 } else if success {
-                    continuation.resume(returning: PhotoLibraryImportResult(localIdentifier: localIdentifier, created: true))
+                    continuation.resume(returning: PhotoLibraryImportResult(localIdentifier: nil, created: true))
                 } else {
                     continuation.resume(throwing: PhotoLibraryImporterError.assetCreationFailed("PhotoKit returned an unsuccessful change request without an error."))
                 }
@@ -98,19 +101,17 @@ public final class PhotoLibraryImporter: @unchecked Sendable {
             throw PhotoLibraryImporterError.authorizationDenied
         }
 
-        return try await withCheckedThrowingContinuation { continuation in
-            var localIdentifier: String?
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<PhotoLibraryImportResult, Error>) in
             PHPhotoLibrary.shared().performChanges({
                 let request = PHAssetCreationRequest.forAsset()
                 let options = PHAssetResourceCreationOptions()
                 options.shouldMoveFile = false
                 request.addResource(with: .video, fileURL: videoURL, options: options)
-                localIdentifier = request.placeholderForCreatedAsset?.localIdentifier
             }, completionHandler: { success, error in
                 if let error {
                     continuation.resume(throwing: PhotoLibraryImporterError.assetCreationFailed(error.localizedDescription))
                 } else if success {
-                    continuation.resume(returning: PhotoLibraryImportResult(localIdentifier: localIdentifier, created: true))
+                    continuation.resume(returning: PhotoLibraryImportResult(localIdentifier: nil, created: true))
                 } else {
                     continuation.resume(throwing: PhotoLibraryImporterError.assetCreationFailed("PhotoKit returned an unsuccessful change request without an error."))
                 }
@@ -118,3 +119,4 @@ public final class PhotoLibraryImporter: @unchecked Sendable {
         }
     }
 }
+#endif
