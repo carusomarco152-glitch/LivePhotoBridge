@@ -50,13 +50,18 @@ jobs:
           mkdir -p artifacts Payload
           cp -R "$APP_PATH" Payload/LivePhotoBridge.app
 
-          cd Payload
-          zip -qry ../artifacts/LivePhotoBridge-SideStore.ipa LivePhotoBridge.app
-          cd ..
+          # An IPA must contain a top-level Payload directory.
+          # Do not cd into Payload before zipping, otherwise SideStore
+          # cannot find Payload and reports "No such file or directory".
+          zip -qry artifacts/LivePhotoBridge-SideStore.ipa Payload
+
           rm -rf Payload
 
           test -f artifacts/LivePhotoBridge-SideStore.ipa
           unzip -l artifacts/LivePhotoBridge-SideStore.ipa
+
+          # Fail the build if the IPA does not have the required structure.
+          unzip -Z1 artifacts/LivePhotoBridge-SideStore.ipa | grep -q '^Payload/LivePhotoBridge.app/'
 
       - name: Upload IPA only
         uses: actions/upload-artifact@v4
