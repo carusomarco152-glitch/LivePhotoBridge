@@ -5,7 +5,7 @@
  objectVersion = 56;
  objects = {
  A10000010000000000000001 = {isa = PBXBuildFile; fileRef = A10000020000000000000002; };
- A10000020000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../LivePhotoBridgeApp.swift; sourceTree = "<group>"; };
+ A10000020000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePhotoBridgeApp.swift; sourceTree = "<group>"; };
  A10000030000000000000003 = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
  A10000040000000000000004 = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LivePhotoBridge.app; sourceTree = BUILT_PRODUCTS_DIR; };
  A10000100000000000000010 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
