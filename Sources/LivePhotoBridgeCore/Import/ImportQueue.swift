@@ -74,6 +74,10 @@ public actor ImportQueueStore {
         try persist()
     }
 
+    public func nextPendingItem() -> ImportQueueItem? {
+        snapshot.items.first { $0.state == .pending }
+    }
+
     public func update(id: UUID, state: ImportItemState, errorMessage: String? = nil) throws {
         guard let index = snapshot.items.firstIndex(where: { $0.id == id }) else { return }
         snapshot.items[index].state = state
