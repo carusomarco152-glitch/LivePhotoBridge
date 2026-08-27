@@ -1,3 +1,4 @@
+#if os(iOS)
 import Foundation
 import Photos
 
@@ -10,16 +11,11 @@ public enum LivePhotoImportError: LocalizedError, Sendable {
 
     public var errorDescription: String? {
         switch self {
-        case .missingPhoto:
-            return "The Live Photo photo resource is missing."
-        case .missingVideo:
-            return "The Live Photo paired video resource is missing."
-        case .unsupportedPair:
-            return "Photos does not accept this pair as a Live Photo resource combination."
-        case .photoLibraryDenied:
-            return "Photo Library access was not granted."
-        case .importFailed(let message):
-            return message
+        case .missingPhoto: return "The Live Photo photo resource is missing."
+        case .missingVideo: return "The Live Photo paired video resource is missing."
+        case .unsupportedPair: return "Photos does not accept this pair as a Live Photo resource combination."
+        case .photoLibraryDenied: return "Photo Library access was not granted."
+        case .importFailed(let message): return message
         }
     }
 }
@@ -28,12 +24,11 @@ public enum LivePhotoImportError: LocalizedError, Sendable {
 public final class LivePhotoImporter: @unchecked Sendable {
     public init() {}
 
-    /// Imports the original photo and movie files as a single Photos Live Photo asset.
-    /// No image or video transcoding is performed here.
+    /// Imports the original photo and movie resources without transcoding them.
     public func importPair(
         photoURL: URL,
         videoURL: URL,
-        shouldMoveVideoFile: Bool = true
+        shouldMoveVideoFile: Bool = false
     ) async throws {
         guard FileManager.default.fileExists(atPath: photoURL.path) else {
             throw LivePhotoImportError.missingPhoto
@@ -52,16 +47,12 @@ public final class LivePhotoImporter: @unchecked Sendable {
             throw LivePhotoImportError.photoLibraryDenied
         }
 
-        let resources: [PHAssetResourceType] = [.photo, .pairedVideo]
-        guard PHAssetCreationRequest.supportsAssetResourceTypes(resources) else {
-            throw LivePhotoImportError.unsupportedPair
-        }
-
-        try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             PHPhotoLibrary.shared().performChanges({
                 let request = PHAssetCreationRequest.forAsset()
 
                 let photoOptions = PHAssetResourceCreationOptions()
+                photoOptions.shouldMoveFile = false
                 request.addResource(with: .photo, fileURL: photoURL, options: photoOptions)
 
                 let videoOptions = PHAssetResourceCreationOptions()
@@ -69,15 +60,14 @@ public final class LivePhotoImporter: @unchecked Sendable {
                 request.addResource(with: .pairedVideo, fileURL: videoURL, options: videoOptions)
             }, completionHandler: { success, error in
                 if success {
-                    continuation.resume()
+                    continuation.resume(returning: ())
                 } else {
-                    continuation.resume(
-                        throwing: LivePhotoImportError.importFailed(
-                            error?.localizedDescription ?? "Photos rejected the Live Photo import."
-                        )
-                    )
+                    continuation.resume(throwing: LivePhotoImportError.importFailed(
+                        error?.localizedDescription ?? "Photos rejected the Live Photo import."
+                    ))
                 }
             })
         }
     }
 }
+#endif
