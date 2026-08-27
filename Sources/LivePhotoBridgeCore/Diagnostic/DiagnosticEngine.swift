@@ -30,13 +30,15 @@ public struct DiagnosticEngine: Sendable {
                 items.append(.init(severity: .warning, title: "Video ContentIdentifier", detail: "Not found in QuickTime metadata."))
             }
 
+            // AVAsset.duration is available on the older deployment targets used by
+            // the package, avoiding the macOS 12-only async load API.
             let asset = AVURLAsset(url: videoURL)
-            do {
-                let duration = try await asset.load(.duration)
+            let duration = asset.duration
+            if duration.isValid {
                 let seconds = CMTimeGetSeconds(duration)
                 items.append(.init(severity: .info, title: "Video duration", detail: String(format: "%.3f seconds", seconds)))
-            } catch {
-                items.append(.init(severity: .error, title: "Video inspection", detail: error.localizedDescription))
+            } else {
+                items.append(.init(severity: .error, title: "Video inspection", detail: "Unable to read video duration."))
             }
         } else {
             items.append(.init(severity: .warning, title: "Paired video", detail: "No video supplied for this diagnostic run."))
