@@ -17,15 +17,15 @@ public enum ContentIdentifierReader {
     }
 
     /// Reads the QuickTime content identifier from a movie without decoding or rewriting it.
+    /// Uses the synchronous AVAsset metadata API so the shared core package can also
+    /// compile for the macOS deployment target used by the command-line/build target.
     public static func videoContentIdentifier(at url: URL) async -> String? {
         let asset = AVURLAsset(url: url)
-        do {
-            let metadata = try await asset.load(.metadata)
-            return metadata
-                .first(where: { $0.identifier == .quickTimeMetadataContentIdentifier })?
-                .stringValue
-        } catch {
+        guard let item = asset.metadata.first(where: {
+            $0.identifier == .quickTimeMetadataContentIdentifier
+        }) else {
             return nil
         }
+        return item.stringValue
     }
 }
