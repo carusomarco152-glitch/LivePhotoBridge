@@ -1,48 +1,82 @@
 # Live Photo Bridge
 
-A privacy-first iOS application for importing large photo/video collections from a computer into the iPhone Photos library, with special handling for Apple Live Photos.
+A privacy-first iOS application for importing large photo/video collections from a computer into the iPhone Photos library, with special handling for Apple Live Photos and other computational-photo features.
 
-## Project goals
+## Core rules
 
-- Import thousands of photos and videos without iTunes/Finder synchronization.
-- Preserve original media files whenever possible; do not transcode unnecessarily.
-- Detect Live Photo pairs using Apple's ContentIdentifier metadata.
-- Support HEIC/JPEG still resources and MOV/MP4 video candidates at the discovery layer.
-- Treat suspicious pairs (for example, same filename but different ContentIdentifiers) as **incomplete** instead of silently pairing them.
-- Import valid pairs as a single Photos Live Photo using PhotoKit.
-- Provide a permanent import history, detailed progress, and an error log.
-- Keep the PC-to-iPhone transfer local to the user's network; no cloud service is required.
+- **Original files first:** no intentional image/video transcoding or recompression.
+- Ordinary photos and videos are imported as ordinary Photos assets unless metadata gives a credible reason to treat them as Live Photo components.
+- A filename match is **never** enough for automatic Live Photo reconstruction.
+- Exact `ContentIdentifier` matches are high-confidence candidates.
+- Suspicious cases (for example, same filename but different identifiers) go to **Live Photo Incomplete** for manual review.
+- A successful import must be followed by verification where the Photos APIs allow it.
+- Source files on the PC are never deleted automatically.
+- Interrupted large transfers must be resumable.
+- Import sessions are permanently summarized in an on-device history.
+- Errors and warnings are retained in a copyable/shareable log.
+- PC-to-iPhone transfer is local-network only; no cloud service is required.
 
-## Current status
+## Current implementation
 
-This repository starts from zero. The first milestone is the Live Photo engine, before the transfer UI is built.
+The first core scaffold is now in the repository:
 
-Implemented in the first scaffold:
+- `MediaResource` models HEIC/JPEG still resources and MOV/MP4 video resources.
+- `ContentIdentifierReader` reads the Apple Live Photo identifier from still-image MakerApple metadata and QuickTime movie metadata.
+- `LivePhotoMatcher` provides conservative pairing decisions.
+- `MediaClassifier` separates ordinary media from resources that contain Live Photo evidence before pairing is attempted.
+- `ImportModels` defines import disposition, stages, progress and persistent summary data.
+- `BridgeLogger` provides structured, copyable log entries for diagnostics.
+- `LivePhotoImporter` is the PhotoKit import boundary; it is deliberately kept separate from transfer and matching logic.
+- Unit tests cover the initial conservative classification rules.
 
-- Domain models for media resources and Live Photo candidates.
-- ContentIdentifier readers for still-image MakerApple metadata and QuickTime movie metadata.
-- Conservative matching engine:
-  - exact ContentIdentifier match -> automatic/high-confidence candidate;
-  - same filename with a differing identifier -> probable/manual-review candidate;
-  - missing counterpart -> incomplete candidate;
-  - ambiguous matches -> manual review.
-- PhotoKit importer using `PHAssetCreationRequest` with `.photo` + `.pairedVideo`.
-- Unit tests for the matching rules.
+## Planned import pipeline
 
-Apple documents that a Live Photo appears as one Photos asset but is composed of a still image and a movie, and that `PHAssetCreationRequest` can save those resources together using `.photo` and `.pairedVideo` without requiring an intermediate media render. See the Apple documentation links in the project notes below.
+```text
+PC files
+   ↓
+local transfer
+   ↓
+metadata scan
+   ↓
+media classification
+   ↓
+Live Photo matching
+   ├─ ordinary photo/video → normal Photos import
+   ├─ exact Live Photo match → Live Photo import
+   └─ suspicious/ambiguous → Live Photo Incomplete
+   ↓
+PhotoKit import
+   ↓
+verification
+   ↓
+persistent import history + error log
+```
 
-## Development plan
+## Live Photo matching policy
 
-1. Validate real-world Live Photo metadata from exported iPhone assets.
-2. Build an on-device diagnostic/test screen that imports one pair and verifies the resulting `PHAsset`.
-3. Add robust metadata inspection and validation, including the movie's Live Photo metadata track.
-4. Build the local PC/browser transfer service.
-5. Add large-transfer queueing, pause/resume, checksums, and progress reporting.
-6. Add the Live Photo incomplete review queue.
-7. Add permanent import history and error logs.
+The app supports HEIC/JPEG and MOV/MP4 at the discovery layer. Extensions are not sufficient to declare a Live Photo. The validator will inspect metadata and resource compatibility before using `PHAssetCreationRequest` with `.photo` and `.pairedVideo`.
+
+Examples:
+
+- matching identifier + valid resources → automatic Live Photo candidate;
+- different identifiers but same filename/other compatible evidence → manual review;
+- missing counterpart → Live Photo Incomplete;
+- no Live Photo evidence → ordinary media import;
+- ambiguous pairing → manual review, never silent pairing.
+
+## Development roadmap
+
+1. Validate the supplied real-world HEIC + MP4 sample and other real iPhone samples.
+2. Build the on-device diagnostic screen for one-pair import and post-import verification.
+3. Expand metadata validation, including Live Photo movie metadata and Portrait/depth detection.
+4. Build the local browser-based PC transfer service with automatic device discovery and pairing.
+5. Add large-transfer queueing, checksums, pause/resume and progress reporting.
+6. Add the Live Photo Incomplete review queue.
+7. Add permanent import history, duplicate detection and error logs.
 8. Build the final SwiftUI interface.
-9. Produce SideStore-compatible development builds for real-device testing.
+9. Configure development signing and SideStore-compatible builds for real-device testing.
+10. Add regression fixtures/tests for ordinary media, Live Photos, Portrait/depth, HDR, slow-motion and other computational media.
 
-## Important design rule
+## Safety principle
 
-A filename match is never enough for automatic Live Photo reconstruction. The app must prefer the ContentIdentifier and validate the actual resources. A suspicious pair is shown to the user rather than silently creating a potentially incorrect Live Photo.
+If the app cannot preserve a special capability reliably through the public Photos APIs, it must report that limitation rather than silently converting or degrading the user's media.
