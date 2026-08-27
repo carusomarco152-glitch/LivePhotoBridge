@@ -1,0 +1,34 @@
+name: Build iOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.0'
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Build Swift package
+        run: swift build
+
+      - name: Run tests
+        run: swift test
+
+      - name: Archive note
+        run: |
+          echo "Core package build and tests completed."
+          echo "The signed iOS IPA step will be enabled once an Xcode project and signing strategy are added."
