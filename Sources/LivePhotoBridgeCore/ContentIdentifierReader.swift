@@ -1,36 +1,19 @@
 import AVFoundation
-import CoreImage
-import ImageIO
 import Foundation
+import ImageIO
 
 public enum ContentIdentifierReader {
     /// Reads the Live Photo content identifier from a still image.
-    /// Apple associates this identifier with the image's Maker Apple metadata.
+    /// The identifier is stored in the MakerApple metadata dictionary.
     public static func imageContentIdentifier(at url: URL) -> String? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else {
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let makerApple = properties[kCGImagePropertyMakerAppleDictionary] as? [CFString: Any] else {
             return nil
         }
 
-        guard let makerApple = properties[kCGImagePropertyMakerAppleDictionary] as? [CFString: Any] else {
-            return nil
-        }
-
-        // Apple documents the Live Photo identifier in MakerApple metadata.
-        // Key 17 is the identifier used by iOS/iPhone Live Photo stills.
-        if let value = makerApple[kCGImagePropertyMakerAppleDictionary as CFString] as? String {
-            return value
-        }
-
-        if let value = makerApple["17" as CFString] as? String {
-            return value
-        }
-
-        if let value = makerApple[17 as NSNumber] as? String {
-            return value
-        }
-
-        return nil
+        // 17 is the MakerApple key used by Apple's Live Photo still-image metadata.
+        return makerApple["17" as CFString] as? String
     }
 
     /// Reads the QuickTime content identifier from a movie without decoding or rewriting it.
