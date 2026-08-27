@@ -39,20 +39,29 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             build
 
-      - name: Package unsigned IPA
+      - name: Package clean unsigned IPA for SideStore
+        shell: bash
         run: |
-          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -path '*/Build/Products/Release-iphoneos/LivePhotoBridge.app' -print -quit)
+          set -euo pipefail
+          APP_PATH=$(find "$HOME/Library/Developer/Xcode/DerivedData" -path '*/Build/Products/Release-iphoneos/LivePhotoBridge.app' -print -quit)
           test -n "$APP_PATH"
+
           rm -rf artifacts Payload
           mkdir -p artifacts Payload
           cp -R "$APP_PATH" Payload/LivePhotoBridge.app
-          ditto -c -k --sequesterRsrc --keepParent Payload artifacts/LivePhotoBridge.ipa
-          rm -rf Payload
-          test -f artifacts/LivePhotoBridge.ipa
 
-      - name: Upload iOS IPA artifact
+          cd Payload
+          zip -qry ../artifacts/LivePhotoBridge-SideStore.ipa LivePhotoBridge.app
+          cd ..
+          rm -rf Payload
+
+          test -f artifacts/LivePhotoBridge-SideStore.ipa
+          unzip -l artifacts/LivePhotoBridge-SideStore.ipa
+
+      - name: Upload IPA only
         uses: actions/upload-artifact@v4
         with:
-          name: LivePhotoBridge-iOS-unsigned
-          path: artifacts/LivePhotoBridge.ipa
+          name: LivePhotoBridge-SideStore-IPA
+          path: artifacts/LivePhotoBridge-SideStore.ipa
           if-no-files-found: error
+          retention-days: 7
