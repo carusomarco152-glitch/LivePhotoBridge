@@ -39,17 +39,20 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             build
 
-      - name: Package unsigned app
+      - name: Package unsigned IPA
         run: |
           APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -path '*/Build/Products/Release-iphoneos/LivePhotoBridge.app' -print -quit)
           test -n "$APP_PATH"
-          mkdir -p artifacts
-          ditto "$APP_PATH" artifacts/LivePhotoBridge.app
-          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" artifacts/LivePhotoBridge-unsigned.zip
+          rm -rf artifacts Payload
+          mkdir -p artifacts Payload
+          cp -R "$APP_PATH" Payload/LivePhotoBridge.app
+          ditto -c -k --sequesterRsrc --keepParent Payload artifacts/LivePhotoBridge.ipa
+          rm -rf Payload
+          test -f artifacts/LivePhotoBridge.ipa
 
-      - name: Upload iOS app artifact
+      - name: Upload iOS IPA artifact
         uses: actions/upload-artifact@v4
         with:
           name: LivePhotoBridge-iOS-unsigned
-          path: artifacts/
+          path: artifacts/LivePhotoBridge.ipa
           if-no-files-found: error
