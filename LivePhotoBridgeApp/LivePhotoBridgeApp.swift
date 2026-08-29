@@ -140,17 +140,20 @@ struct ContentView: View {
                 throw LivePhotoError.identifiersDoNotMatch(photoIdentifier, videoIdentifier)
             }
 
-            // still-image-time viene mantenuto nel MOV originale e non viene mai riscritto.
-            // AVFoundation non espone sempre questo timed metadata tramite asset.load(.metadata),
-            // quindi la sua assenza dalla lettura diagnostica non deve bloccare l'importazione.
-            let stillImageTimeDetected = await videoContainsStillImageTime(videoURL)
-            status = stillImageTimeDetected
-                ? "Coppia verificata. Mantengo HEIC e MOV originali..."
-                : "Coppia verificata. Mantengo HEIC e MOV originali... (metadata timed non leggibile dal controllo diagnostico)"
+            // Controllo diagnostico soltanto: non modifica e non blocca l'importazione.
+            _ = await videoContainsStillImageTime(videoURL)
 
             let auth = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
             guard auth == .authorized || auth == .limited else {
                 throw LivePhotoError.photoLibraryDenied
+            }
+
+            // Chiediamo a Photos prima di avviare la transazione se questa coppia
+            // di risorse è supportata dal sistema. In questo modo evitiamo di
+            // inviare una combinazione non supportata alla libreria.
+            let supported = PHAssetCreationRequest.supportsAssetResourceTypes([.photo, .pairedVideo])
+            guard supported else {
+                throw LivePhotoError.unsupportedResourceCombination
             }
 
             status = "Importo la coppia nella libreria Foto..."
@@ -237,6 +240,7 @@ struct ContentView: View {
         case videoIdentifierMissing
         case identifiersDoNotMatch(String, String)
         case stillImageTimeMissing
+        case unsupportedResourceCombination
         case creationFailed
         case photoLibraryDenied
 
@@ -248,6 +252,7 @@ struct ContentView: View {
             case .videoIdentifierMissing: return "Il MOV non contiene il content identifier Apple della Live Photo."
             case let .identifiersDoNotMatch(photo, video): return "Gli identificatori non corrispondono. Foto: \(photo) — Video: \(video)"
             case .stillImageTimeMissing: return "Il MOV non contiene il metadata still-image-time necessario alla Live Photo."
+            case .unsupportedResourceCombination: return "Photos non supporta questa combinazione di risorse per una Live Photo."
             case .creationFailed: return "Foto non ha completato la creazione della Live Photo."
             case .photoLibraryDenied: return "Accesso alla libreria Foto non autorizzato."
             }
