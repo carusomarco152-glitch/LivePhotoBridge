@@ -41,7 +41,7 @@ struct PickerVideoFile: Transferable {
 struct ContentView: View {
     @State private var photoItem: PhotosPickerItem?
     @State private var videoItem: PhotosPickerItem?
-    @State private var status = "Seleziona la foto HEIC e il video abbinato."
+    @State private var status = "Seleziona la foto HEIC/JPEG e il video MOV/MP4 abbinato."
     @State private var isWorking = false
 
     var body: some View {
@@ -50,8 +50,8 @@ struct ContentView: View {
                 Image(systemName: "livephoto").font(.system(size: 64))
                 Text("Live Photo Bridge").font(.largeTitle.bold())
                 Text("Ricrea una Live Photo associando foto e video tramite l'asset identifier Apple.").multilineTextAlignment(.center).foregroundStyle(.secondary)
-                PhotosPicker(selection: $photoItem, matching: .images) { Label("Scegli foto HEIC", systemImage: "photo").frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent)
-                PhotosPicker(selection: $videoItem, matching: .videos) { Label("Scegli video MOV", systemImage: "video").frame(maxWidth: .infinity) }.buttonStyle(.bordered)
+                PhotosPicker(selection: $photoItem, matching: .images) { Label("Scegli foto HEIC/JPEG", systemImage: "photo").frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent)
+                PhotosPicker(selection: $videoItem, matching: .videos) { Label("Scegli video MOV/MP4", systemImage: "video").frame(maxWidth: .infinity) }.buttonStyle(.bordered)
                 Button { Task { await importLivePhoto() } } label: {
                     if isWorking { ProgressView().frame(maxWidth: .infinity) } else { Label("Crea Live Photo", systemImage: "wand.and.stars").frame(maxWidth: .infinity) }
                 }.buttonStyle(.borderedProminent).disabled(photoItem == nil || videoItem == nil || isWorking)
@@ -70,16 +70,22 @@ struct ContentView: View {
             let dir = FileManager.default.temporaryDirectory.appendingPathComponent("LivePhotoBridge", isDirectory: true)
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let identifier = UUID().uuidString.uppercased()
-            let sourcePhoto = dir.appendingPathComponent("source.heic")
-            let sourceVideo = dir.appendingPathComponent("source.mov")
-            let pairedPhoto = dir.appendingPathComponent("paired.heic")
-            let pairedVideo = dir.appendingPathComponent("paired.mov")
             guard let pickedPhoto = try await photoItem.loadTransferable(type: PickerPhotoFile.self), let pickedVideo = try await videoItem.loadTransferable(type: PickerVideoFile.self) else { throw LivePhotoError.invalidInput }
-            try? FileManager.default.removeItem(at: sourcePhoto); try? FileManager.default.removeItem(at: sourceVideo)
-            try FileManager.default.copyItem(at: pickedPhoto.url, to: sourcePhoto); try FileManager.default.copyItem(at: pickedVideo.url, to: sourceVideo)
+
+            let photoExtension = pickedPhoto.url.pathExtension.isEmpty ? "heic" : pickedPhoto.url.pathExtension.lowercased()
+            let videoExtension = pickedVideo.url.pathExtension.isEmpty ? "mp4" : pickedVideo.url.pathExtension.lowercased()
+            let sourcePhoto = dir.appendingPathComponent("source.\(photoExtension)")
+            let sourceVideo = dir.appendingPathComponent("source.\(videoExtension)")
+            let pairedPhoto = dir.appendingPathComponent("paired.\(photoExtension)")
+            // Apple Live Photo paired movies are QuickTime movies. An MP4 input is therefore
+            // rewrapped into MOV without decoding/re-encoding its audio/video samples.
+            let pairedVideo = dir.appendingPathComponent("paired.mov")
+            try? FileManager.default.removeItem(at: sourcePhoto); try? FileManager.default.removeItem(at: sourceVideo); try? FileManager.default.removeItem(at: pairedPhoto); try? FileManager.default.removeItem(at: pairedVideo)
+            try FileManager.default.copyItem(at: pickedPhoto.url, to: sourcePhoto)
+            try FileManager.default.copyItem(at: pickedVideo.url, to: sourceVideo)
             status = "Preparo la foto..."
             try addAssetIdentifier(identifier, toImage: sourcePhoto, destination: pairedPhoto)
-            status = "Preparo il video e i metadati Live Photo..."
+            status = "Preparo il video Live Photo senza ricodifica..."
             try await createPairedVideo(from: sourceVideo, identifier: identifier, destination: pairedVideo)
             let auth = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
             guard auth == .authorized || auth == .limited else { throw LivePhotoError.photoLibraryDenied }
@@ -91,8 +97,7 @@ struct ContentView: View {
 
     private func addAssetIdentifier(_ identifier: String, toImage source: URL, destination: URL) throws {
         guard let sourceRef = CGImageSourceCreateWithURL(source as CFURL, nil), let image = CGImageSourceCreateImageAtIndex(sourceRef, 0, nil), var properties = CGImageSourceCopyPropertiesAtIndex(sourceRef, 0, nil) as? [CFString: Any] else { throw LivePhotoError.invalidPhoto }
-        let sourceType = CGImageSourceGetType(sourceRef) ?? (UTType.heic.identifier as CFString)
-        guard let destinationRef = CGImageDestinationCreateWithURL(destination as CFURL, sourceType, 1, nil) else { throw LivePhotoError.invalidPhoto }
+        guard let sourceType = CGImageSourceGetType(sourceRef), let destinationRef = CGImageDestinationCreateWithURL(destination as CFURL, sourceType, 1, nil) else { throw LivePhotoError.invalidPhoto }
         properties[kCGImagePropertyMakerAppleDictionary] = ["17": identifier]
         CGImageDestinationAddImage(destinationRef, image, properties as CFDictionary)
         guard CGImageDestinationFinalize(destinationRef) else { throw LivePhotoError.invalidPhoto }
@@ -125,7 +130,6 @@ struct ContentView: View {
                 }
             }
         }
-        try? FileManager.default.removeItem(at: destination)
         let writer = try AVAssetWriter(outputURL: destination, fileType: .mov)
         let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: nil, sourceFormatHint: videoFormat)
         videoInput.transform = transform
@@ -138,11 +142,19 @@ struct ContentView: View {
             input.expectsMediaDataInRealTime = false
             if writer.canAdd(input) { writer.add(input); audioInput = input }
         }
+
+        // Keep the source's existing file-level metadata whenever AVAssetWriter supports it,
+        // then add/replace the Apple Live Photo content identifier. No audio/video samples are
+        // decoded or re-encoded because both reader outputs and writer inputs use nil settings.
+        var writerMetadata = asset.metadata
+        writerMetadata.removeAll { $0.identifier == .quickTimeMetadataContentIdentifier }
         let identifierItem = AVMutableMetadataItem()
         identifierItem.identifier = .quickTimeMetadataContentIdentifier
         identifierItem.value = identifier as NSString
         identifierItem.dataType = kCMMetadataBaseDataType_UTF8 as String
-        writer.metadata = [identifierItem]
+        writerMetadata.append(identifierItem)
+        writer.metadata = writerMetadata
+
         let metadataInput = try makeStillImageTimeInput()
         guard writer.canAdd(metadataInput) else { throw LivePhotoError.metadataFailed }
         writer.add(metadataInput)
@@ -159,9 +171,6 @@ struct ContentView: View {
             writer.cancelWriting()
             throw LivePhotoError.metadataFailed
         }
-        // The metadata input is an independent writer input. It must be explicitly
-        // finished; otherwise AVAssetWriter remains in .writing forever waiting for
-        // another sample and the app appears frozen at "Preparo il video...".
         metadataInput.markAsFinished()
         guard reader.startReading() else {
             writer.cancelWriting()
