@@ -148,14 +148,10 @@ struct ContentView: View {
                 throw LivePhotoError.photoLibraryDenied
             }
 
-            // Chiediamo a Photos prima di avviare la transazione se questa coppia
-            // di risorse è supportata dal sistema. In questo modo evitiamo di
-            // inviare una combinazione non supportata alla libreria.
-            let supported = PHAssetCreationRequest.supportsAssetResourceTypes([.photo, .pairedVideo])
-            guard supported else {
-                throw LivePhotoError.unsupportedResourceCombination
-            }
-
+            // Non facciamo un preflight con supportsAssetResourceTypes: nell'SDK
+            // usato dalla build questa API espone una firma incompatibile con
+            // PHAssetResourceType. Lasciamo che Photos validi la coppia nella
+            // transazione reale, restando così sul percorso ufficiale di import.
             status = "Importo la coppia nella libreria Foto..."
             try await saveLivePhoto(photoURL: photoURL, videoURL: videoURL)
             status = "✅ Live Photo creata. Controlla Foto."
