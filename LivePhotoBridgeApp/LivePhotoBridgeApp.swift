@@ -77,8 +77,11 @@ struct ContentView: View {
             let sourcePhoto = dir.appendingPathComponent("source.\(photoExtension)")
             let sourceVideo = dir.appendingPathComponent("source.\(videoExtension)")
             let pairedPhoto = dir.appendingPathComponent("paired.\(photoExtension)")
-            // Apple Live Photo paired movies are QuickTime movies. An MP4 input is therefore
-            // rewrapped into MOV without decoding/re-encoding its audio/video samples.
+            // Apple Photos expects the paired Live Photo movie as a QuickTime movie.
+            // MP4 input is therefore REMUXED to MOV: compressed audio/video samples are
+            // copied without decoding or re-encoding, so there is no generation loss.
+            // MOV input is also passed through the same sample-copy path so the required
+            // Live Photo metadata can be added without transcoding it.
             let pairedVideo = dir.appendingPathComponent("paired.mov")
             try? FileManager.default.removeItem(at: sourcePhoto); try? FileManager.default.removeItem(at: sourceVideo); try? FileManager.default.removeItem(at: pairedPhoto); try? FileManager.default.removeItem(at: pairedVideo)
             try FileManager.default.copyItem(at: pickedPhoto.url, to: sourcePhoto)
@@ -130,6 +133,11 @@ struct ContentView: View {
                 }
             }
         }
+
+        // Always write a QuickTime container because this is the container expected by
+        // Apple's Live Photo paired-video resource. AVAssetReaderTrackOutput and
+        // AVAssetWriterInput both use nil settings: the compressed samples are copied
+        // as-is. This is a remux, not a video/audio re-encode.
         let writer = try AVAssetWriter(outputURL: destination, fileType: .mov)
         let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: nil, sourceFormatHint: videoFormat)
         videoInput.transform = transform
@@ -143,9 +151,9 @@ struct ContentView: View {
             if writer.canAdd(input) { writer.add(input); audioInput = input }
         }
 
-        // Keep the source's existing file-level metadata whenever AVAssetWriter supports it,
-        // then add/replace the Apple Live Photo content identifier. No audio/video samples are
-        // decoded or re-encoded because both reader outputs and writer inputs use nil settings.
+        // Preserve the source's top-level metadata. Then replace/add only the metadata
+        // required to associate this movie with the still image. No ordinary source
+        // metadata is intentionally discarded here.
         var writerMetadata = asset.metadata
         writerMetadata.removeAll { $0.identifier == .quickTimeMetadataContentIdentifier }
         let identifierItem = AVMutableMetadataItem()
@@ -172,6 +180,7 @@ struct ContentView: View {
             throw LivePhotoError.metadataFailed
         }
         metadataInput.markAsFinished()
+
         guard reader.startReading() else {
             writer.cancelWriting()
             throw reader.error ?? LivePhotoError.videoReaderFailed
@@ -182,22 +191,36 @@ struct ContentView: View {
                 throw audioReader.error ?? LivePhotoError.audioReaderFailed
             }
         }
+
         let videoQueue = DispatchQueue(label: "LivePhotoBridge.video")
         videoInput.requestMediaDataWhenReady(on: videoQueue) {
             while videoInput.isReadyForMoreMediaData {
-                guard let sample = videoOutput.copyNextSampleBuffer() else { videoInput.markAsFinished(); return }
-                if !videoInput.append(sample) { videoInput.markAsFinished(); return }
+                guard let sample = videoOutput.copyNextSampleBuffer() else {
+                    videoInput.markAsFinished()
+                    return
+                }
+                if !videoInput.append(sample) {
+                    videoInput.markAsFinished()
+                    return
+                }
             }
         }
         if let audioReader = audioReader, let audioOutput = audioOutput, let audioInput = audioInput {
             let audioQueue = DispatchQueue(label: "LivePhotoBridge.audio")
             audioInput.requestMediaDataWhenReady(on: audioQueue) {
                 while audioInput.isReadyForMoreMediaData {
-                    guard let sample = audioOutput.copyNextSampleBuffer() else { audioInput.markAsFinished(); return }
-                    if !audioInput.append(sample) { audioInput.markAsFinished(); return }
+                    guard let sample = audioOutput.copyNextSampleBuffer() else {
+                        audioInput.markAsFinished()
+                        return
+                    }
+                    if !audioInput.append(sample) {
+                        audioInput.markAsFinished()
+                        return
+                    }
                 }
             }
         }
+
         try await waitForWriterToFinish(writer, timeout: 120)
         guard writer.status == .completed else { throw writer.error ?? LivePhotoError.videoWriterFailed }
     }
@@ -205,7 +228,10 @@ struct ContentView: View {
     private func waitForWriterToFinish(_ writer: AVAssetWriter, timeout: Double) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while writer.status == .writing {
-            if Date() > deadline { writer.cancelWriting(); throw LivePhotoError.videoWriterTimeout }
+            if Date() > deadline {
+                writer.cancelWriting()
+                throw LivePhotoError.videoWriterTimeout
+            }
             try await Task.sleep(for: .milliseconds(100))
         }
     }
