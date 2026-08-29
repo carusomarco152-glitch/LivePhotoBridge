@@ -75,13 +75,11 @@ struct ContentView: View {
             guard photoIdentifier.caseInsensitiveCompare(videoIdentifier) == .orderedSame else { throw LivePhotoError.identifiersDoNotMatch(photoIdentifier, videoIdentifier) }
             _ = await videoContainsStillImageTime(videoURL)
 
-            let auth = await MainActor.run {
-                PHPhotoLibrary.requestAuthorization(for: .addOnly)
-            }
+            // This API is async and is called directly from our async workflow.
+            // No MainActor.run wrapper is needed and this avoids the Swift concurrency error.
+            let auth = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
             guard auth == .authorized || auth == .limited else { throw LivePhotoError.photoLibraryDenied }
 
-            let supported = PHAssetCreationRequest.supportsAssetResourceTypes([.photo, .pairedVideo])
-            guard supported else { throw LivePhotoError.unsupportedResourceCombination }
             status = "Importo la coppia nella libreria Foto..."
             try await saveLivePhoto(photoURL: photoURL, videoURL: videoURL)
             status = "✅ Live Photo creata. Controlla Foto."
@@ -89,7 +87,7 @@ struct ContentView: View {
     }
 
     private func readPhotoAssetIdentifier(from url: URL) throws -> String? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil), let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else { throw LivePhotoError.invalidPhoto }
+        guard let source = CGImageSourceCreateWithURL(url as CFURL), let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else { throw LivePhotoError.invalidPhoto }
         if let maker = properties[kCGImagePropertyMakerAppleDictionary] as? [AnyHashable: Any] {
             for (key, value) in maker where String(describing: key) == "17" {
                 if let string = value as? String, !string.isEmpty { return string }
