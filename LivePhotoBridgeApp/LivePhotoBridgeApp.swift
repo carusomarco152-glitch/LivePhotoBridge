@@ -16,7 +16,6 @@ struct ContentView: View {
     @State private var importerKind: ImportedKind = .photo
     @State private var status = "Seleziona direttamente i file originali HEIC/JPEG e MOV dall'app File."
     @State private var isWorking = false
-    @State private var warningMessage: String?
 
     private enum ImportedKind { case photo, video }
 
@@ -66,14 +65,6 @@ struct ContentView: View {
                     .font(.footnote)
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
-
-                if let warningMessage {
-                    Label(warningMessage, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.orange)
-                        .padding(.horizontal, 8)
-                }
 
                 Spacer()
             }
@@ -126,7 +117,6 @@ struct ContentView: View {
     private func importLivePhoto() async {
         guard let photoURL, let videoURL else { return }
         isWorking = true
-        warningMessage = nil
         defer { isWorking = false }
 
         do {
@@ -150,17 +140,20 @@ struct ContentView: View {
                 throw LivePhotoError.identifiersDoNotMatch(photoIdentifier, videoIdentifier)
             }
 
-            // Controllo diagnostico: se non viene trovato tramite AVFoundation,
-            // mostriamo un warning ma NON blocchiamo l'importazione.
-            let hasStillImageTime = await videoContainsStillImageTime(videoURL)
-            if !hasStillImageTime {
-                warningMessage = "Avviso: non riesco a leggere still-image-time dal MOV. Il file originale non verrà modificato e il test continuerà comunque."
-            }
+            // Controllo diagnostico soltanto: non modifica e non blocca l'importazione.
+            _ = await videoContainsStillImageTime(videoURL)
 
-            status = "Richiedo accesso alla libreria Foto..."
             let auth = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
             guard auth == .authorized || auth == .limited else {
                 throw LivePhotoError.photoLibraryDenied
+            }
+
+            // Chiediamo a Photos prima di avviare la transazione se questa coppia
+            // di risorse è supportata dal sistema. In questo modo evitiamo di
+            // inviare una combinazione non supportata alla libreria.
+            let supported = PHAssetCreationRequest.supportsAssetResourceTypes([.photo, .pairedVideo])
+            guard supported else {
+                throw LivePhotoError.unsupportedResourceCombination
             }
 
             status = "Importo la coppia nella libreria Foto..."
