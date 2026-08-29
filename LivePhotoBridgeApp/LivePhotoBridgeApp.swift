@@ -146,9 +146,13 @@ struct ContentView: View {
         guard writer.startWriting() else { throw writer.error ?? LivePhotoError.videoWriterFailed }
         writer.startSession(atSourceTime: .zero)
 
+        // Apple does not expose quickTimeMetadataStillImageTime as an
+        // AVMetadataIdentifier on the current SDK. The Live Photo timed
+        // metadata key is the raw QuickTime metadata key below.
         let stillItem = AVMutableMetadataItem()
-        stillItem.identifier = .quickTimeMetadataStillImageTime
-        stillItem.value = NSNumber(value: 0xFF)
+        stillItem.key = "com.apple.quicktime.still-image-time" as (NSCopying & NSObjectProtocol)
+        stillItem.keySpace = AVMetadataKeySpace.quickTimeMetadata
+        stillItem.value = NSNumber(value: -1)
         stillItem.dataType = kCMMetadataBaseDataType_SInt8 as String
         metadataAdaptor.append(AVTimedMetadataGroup(
             items: [stillItem],
@@ -188,7 +192,7 @@ struct ContentView: View {
     private func makeStillImageTimeInput() throws -> AVAssetWriterInput {
         var formatDescription: CMMetadataFormatDescription?
         let specifications: [[String: Any]] = [[
-            kCMMetadataFormatDescriptionMetadataSpecificationKey_Identifier as String: AVMetadataIdentifier.quickTimeMetadataStillImageTime.rawValue,
+            kCMMetadataFormatDescriptionMetadataSpecificationKey_Identifier as String: "mdta/com.apple.quicktime.still-image-time",
             kCMMetadataFormatDescriptionMetadataSpecificationKey_DataType as String: kCMMetadataBaseDataType_SInt8
         ]]
         let status = CMMetadataFormatDescriptionCreateWithMetadataSpecifications(
