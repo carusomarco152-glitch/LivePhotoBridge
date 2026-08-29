@@ -85,7 +85,7 @@ struct ContentView: View {
     }
 
     private func readPhotoAssetIdentifier(from url: URL) throws -> String? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil), let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil, nil) as? [CFString: Any] else { throw LivePhotoError.invalidPhoto }
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil), let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else { throw LivePhotoError.invalidPhoto }
         if let maker = properties[kCGImagePropertyMakerAppleDictionary] as? [AnyHashable: Any] {
             for (key, value) in maker where String(describing: key) == "17" {
                 if let string = value as? String, !string.isEmpty { return string }
