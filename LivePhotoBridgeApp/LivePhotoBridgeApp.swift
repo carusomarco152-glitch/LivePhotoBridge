@@ -15,6 +15,7 @@ struct ContentView: View {
     @State private var showFileImporter = false
     @State private var importerKind: ImportedKind = .photo
     @State private var status = "Seleziona direttamente i file originali HEIC/JPEG e MOV dall'app File."
+    @State private var warning: String?
     @State private var isWorking = false
 
     private enum ImportedKind { case photo, video }
@@ -66,6 +67,17 @@ struct ContentView: View {
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
 
+                if let warning {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                        Text(warning)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.leading)
+                    .padding(.horizontal, 8)
+                }
+
                 Spacer()
             }
             .padding()
@@ -99,6 +111,7 @@ struct ContentView: View {
                 try? FileManager.default.removeItem(at: destination)
                 try FileManager.default.copyItem(at: sourceURL, to: destination)
 
+                warning = nil
                 if kind == .photo {
                     photoURL = destination
                     status = "Foto originale selezionata: \(sourceURL.lastPathComponent)"
@@ -117,6 +130,7 @@ struct ContentView: View {
     private func importLivePhoto() async {
         guard let photoURL, let videoURL else { return }
         isWorking = true
+        warning = nil
         defer { isWorking = false }
 
         do {
@@ -140,14 +154,23 @@ struct ContentView: View {
                 throw LivePhotoError.identifiersDoNotMatch(photoIdentifier, videoIdentifier)
             }
 
-            // still-image-time viene mantenuto nel MOV originale e non viene mai riscritto.
-            // AVFoundation non espone sempre questo timed metadata tramite asset.load(.metadata),
-            // quindi la sua assenza dalla lettura diagnostica non deve bloccare l'importazione.
-            let stillImageTimeDetected = await videoContainsStillImageTime(videoURL)
-            status = stillImageTimeDetected
-                ? "Coppia verificata. Mantengo HEIC e MOV originali..."
-                : "Coppia verificata. Mantengo HEIC e MOV originali... (metadata timed non leggibile dal controllo diagnostico)"
+            // Questo controllo è diagnostico: AVFoundation può non esporre il timed
+            // metadata "still-image-time" tramite asset.metadata anche quando il
+            // metadata è realmente presente nel MOV. Non modifichiamo quindi il file
+            // e non blocchiamo la prova.
+            if !(await videoContainsStillImageTime(videoURL)) {
+                warning = "Avviso: AVFoundation non ha esposto il metadata still-image-time. Continuo comunque usando il MOV originale senza modificarlo."
+            }
 
+            let supported = PHAssetCreationRequest.supportsAssetResourceTypes([
+                NSNumber(value: PHAssetResourceType.photo.rawValue),
+                NSNumber(value: PHAssetResourceType.pairedVideo.rawValue)
+            ])
+            guard supported else {
+                throw LivePhotoError.unsupportedResourceCombination
+            }
+
+            status = "Identificatori corretti. Mantengo HEIC e MOV originali..."
             let auth = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
             guard auth == .authorized || auth == .limited else {
                 throw LivePhotoError.photoLibraryDenied
@@ -212,11 +235,15 @@ struct ContentView: View {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             PHPhotoLibrary.shared().performChanges({
                 let request = PHAssetCreationRequest.forAsset()
+
                 let photoOptions = PHAssetResourceCreationOptions()
                 photoOptions.shouldMoveFile = false
+                photoOptions.originalFilename = photoURL.lastPathComponent
                 request.addResource(with: .photo, fileURL: photoURL, options: photoOptions)
+
                 let videoOptions = PHAssetResourceCreationOptions()
                 videoOptions.shouldMoveFile = false
+                videoOptions.originalFilename = videoURL.lastPathComponent
                 request.addResource(with: .pairedVideo, fileURL: videoURL, options: videoOptions)
             }) { success, error in
                 if let error {
@@ -236,7 +263,7 @@ struct ContentView: View {
         case photoIdentifierMissing
         case videoIdentifierMissing
         case identifiersDoNotMatch(String, String)
-        case stillImageTimeMissing
+        case unsupportedResourceCombination
         case creationFailed
         case photoLibraryDenied
 
@@ -247,7 +274,7 @@ struct ContentView: View {
             case .photoIdentifierMissing: return "L'HEIC non espone il pairing identifier Apple. Seleziona il file originale dall'app File."
             case .videoIdentifierMissing: return "Il MOV non contiene il content identifier Apple della Live Photo."
             case let .identifiersDoNotMatch(photo, video): return "Gli identificatori non corrispondono. Foto: \(photo) — Video: \(video)"
-            case .stillImageTimeMissing: return "Il MOV non contiene il metadata still-image-time necessario alla Live Photo."
+            case .unsupportedResourceCombination: return "Questa versione di iOS non supporta la combinazione di risorse foto + paired video richiesta."
             case .creationFailed: return "Foto non ha completato la creazione della Live Photo."
             case .photoLibraryDenied: return "Accesso alla libreria Foto non autorizzato."
             }
