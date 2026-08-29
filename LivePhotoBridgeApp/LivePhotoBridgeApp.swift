@@ -16,6 +16,7 @@ struct ContentView: View {
     @State private var importerKind: ImportedKind = .photo
     @State private var status = "Seleziona direttamente i file originali HEIC/JPEG e MOV dall'app File."
     @State private var isWorking = false
+    @State private var warningMessage: String?
 
     private enum ImportedKind { case photo, video }
 
@@ -65,6 +66,14 @@ struct ContentView: View {
                     .font(.footnote)
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
+
+                if let warningMessage {
+                    Label(warningMessage, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 8)
+                }
 
                 Spacer()
             }
@@ -117,6 +126,7 @@ struct ContentView: View {
     private func importLivePhoto() async {
         guard let photoURL, let videoURL else { return }
         isWorking = true
+        warningMessage = nil
         defer { isWorking = false }
 
         do {
@@ -140,18 +150,19 @@ struct ContentView: View {
                 throw LivePhotoError.identifiersDoNotMatch(photoIdentifier, videoIdentifier)
             }
 
-            // Controllo diagnostico soltanto: non modifica e non blocca l'importazione.
-            _ = await videoContainsStillImageTime(videoURL)
+            // Controllo diagnostico: se non viene trovato tramite AVFoundation,
+            // mostriamo un warning ma NON blocchiamo l'importazione.
+            let hasStillImageTime = await videoContainsStillImageTime(videoURL)
+            if !hasStillImageTime {
+                warningMessage = "Avviso: non riesco a leggere still-image-time dal MOV. Il file originale non verrà modificato e il test continuerà comunque."
+            }
 
+            status = "Richiedo accesso alla libreria Foto..."
             let auth = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
             guard auth == .authorized || auth == .limited else {
                 throw LivePhotoError.photoLibraryDenied
             }
 
-            // Non facciamo un preflight con supportsAssetResourceTypes: nell'SDK
-            // usato dalla build questa API espone una firma incompatibile con
-            // PHAssetResourceType. Lasciamo che Photos validi la coppia nella
-            // transazione reale, restando così sul percorso ufficiale di import.
             status = "Importo la coppia nella libreria Foto..."
             try await saveLivePhoto(photoURL: photoURL, videoURL: videoURL)
             status = "✅ Live Photo creata. Controlla Foto."
