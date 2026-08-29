@@ -1,50 +1,20 @@
 import SwiftUI
 import Photos
-import PhotosUI
+import UniformTypeIdentifiers
 import ImageIO
 import AVFoundation
-import UniformTypeIdentifiers
-import CoreTransferable
 
 @main
 struct LivePhotoBridgeApp: App {
     var body: some Scene { WindowGroup { ContentView() } }
 }
 
-struct PickerPhotoFile: Transferable {
-    let url: URL
-    static var transferRepresentation: some TransferRepresentation {
-        FileRepresentation(contentType: .image) { item in
-            SentTransferredFile(item.url)
-        } importing: { received in
-            let destination = FileManager.default.temporaryDirectory
-                .appendingPathComponent(UUID().uuidString)
-                .appendingPathExtension(received.file.pathExtension)
-            try FileManager.default.copyItem(at: received.file, to: destination)
-            return PickerPhotoFile(url: destination)
-        }
-    }
-}
-
-struct PickerVideoFile: Transferable {
-    let url: URL
-    static var transferRepresentation: some TransferRepresentation {
-        FileRepresentation(contentType: .movie) { item in
-            SentTransferredFile(item.url)
-        } importing: { received in
-            let destination = FileManager.default.temporaryDirectory
-                .appendingPathComponent(UUID().uuidString)
-                .appendingPathExtension(received.file.pathExtension)
-            try FileManager.default.copyItem(at: received.file, to: destination)
-            return PickerVideoFile(url: destination)
-        }
-    }
-}
-
 struct ContentView: View {
-    @State private var photoItem: PhotosPickerItem?
-    @State private var videoItem: PhotosPickerItem?
-    @State private var status = "Seleziona la foto e il video originali della stessa Live Photo."
+    @State private var photoURL: URL?
+    @State private var videoURL: URL?
+    @State private var showPhotoImporter = false
+    @State private var showVideoImporter = false
+    @State private var status = "Seleziona direttamente i file originali HEIC/JPEG e MOV dall'app File."
     @State private var isWorking = false
 
     var body: some View {
@@ -58,14 +28,18 @@ struct ContentView: View {
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
 
-                PhotosPicker(selection: $photoItem, matching: .images) {
-                    Label("Scegli foto HEIC/JPEG", systemImage: "photo")
+                Button {
+                    showPhotoImporter = true
+                } label: {
+                    Label(photoURL == nil ? "Scegli foto HEIC/JPEG" : "Foto selezionata ✓", systemImage: "photo")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
 
-                PhotosPicker(selection: $videoItem, matching: .videos) {
-                    Label("Scegli video MOV", systemImage: "video")
+                Button {
+                    showVideoImporter = true
+                } label: {
+                    Label(videoURL == nil ? "Scegli video MOV" : "Video selezionato ✓", systemImage: "video")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
@@ -81,7 +55,7 @@ struct ContentView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(photoItem == nil || videoItem == nil || isWorking)
+                .disabled(photoURL == nil || videoURL == nil || isWorking)
 
                 Text(status)
                     .font(.footnote)
@@ -92,33 +66,71 @@ struct ContentView: View {
             }
             .padding()
             .navigationTitle("Live Photo Bridge")
+            .fileImporter(
+                isPresented: $showPhotoImporter,
+                allowedContentTypes: [.heic, .jpeg],
+                allowsMultipleSelection: false
+            ) { result in
+                handleImportedFile(result, kind: .photo)
+            }
+            .fileImporter(
+                isPresented: $showVideoImporter,
+                allowedContentTypes: [.movie],
+                allowsMultipleSelection: false
+            ) { result in
+                handleImportedFile(result, kind: .video)
+            }
+        }
+    }
+
+    private enum ImportedKind { case photo, video }
+
+    private func handleImportedFile(_ result: Result<[URL], Error>, kind: ImportedKind) {
+        switch result {
+        case .success(let urls):
+            guard let sourceURL = urls.first else { return }
+            do {
+                let access = sourceURL.startAccessingSecurityScopedResource()
+                defer {
+                    if access { sourceURL.stopAccessingSecurityScopedResource() }
+                }
+
+                let ext = sourceURL.pathExtension.isEmpty ? (kind == .photo ? "heic" : "mov") : sourceURL.pathExtension
+                let destination = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("LivePhotoBridge-\(UUID().uuidString).\(ext)")
+                try? FileManager.default.removeItem(at: destination)
+                try FileManager.default.copyItem(at: sourceURL, to: destination)
+
+                if kind == .photo {
+                    photoURL = destination
+                    status = "Foto originale selezionata."
+                } else {
+                    videoURL = destination
+                    status = "Video originale selezionato."
+                }
+            } catch {
+                status = "❌ Impossibile copiare il file: \(error.localizedDescription)"
+            }
+        case .failure(let error):
+            status = "❌ Selezione annullata/errore: \(error.localizedDescription)"
         }
     }
 
     private func importLivePhoto() async {
-        guard let photoItem, let videoItem else { return }
+        guard let photoURL, let videoURL else { return }
         isWorking = true
         defer { isWorking = false }
 
         do {
             status = "Leggo i file originali..."
-            guard let pickedPhoto = try await photoItem.loadTransferable(type: PickerPhotoFile.self),
-                  let pickedVideo = try await videoItem.loadTransferable(type: PickerVideoFile.self) else {
-                throw LivePhotoError.invalidInput
+
+            guard photoURL.pathExtension.lowercased() == "heic" || photoURL.pathExtension.lowercased() == "jpg" || photoURL.pathExtension.lowercased() == "jpeg" else {
+                throw LivePhotoError.invalidPhoto
             }
 
-            let dir = FileManager.default.temporaryDirectory
-                .appendingPathComponent("LivePhotoBridge", isDirectory: true)
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-
-            let photoExt = pickedPhoto.url.pathExtension.isEmpty ? "heic" : pickedPhoto.url.pathExtension
-            let photoURL = dir.appendingPathComponent("original.\(photoExt)")
-            let videoURL = dir.appendingPathComponent("original.mov")
-
-            try? FileManager.default.removeItem(at: photoURL)
-            try? FileManager.default.removeItem(at: videoURL)
-            try FileManager.default.copyItem(at: pickedPhoto.url, to: photoURL)
-            try FileManager.default.copyItem(at: pickedVideo.url, to: videoURL)
+            guard videoURL.pathExtension.lowercased() == "mov" else {
+                throw LivePhotoError.invalidVideo
+            }
 
             status = "Controllo gli identificatori Apple..."
             guard let photoIdentifier = try readPhotoAssetIdentifier(from: photoURL) else {
@@ -137,17 +149,7 @@ struct ContentView: View {
                 throw LivePhotoError.stillImageTimeMissing
             }
 
-            status = "Identificatori già corretti. Mantengo il MOV originale..."
-
-            // IMPORTANT: for a genuine Apple backup, the HEIC and MOV already contain
-            // the Live Photo identifiers. We therefore do NOT rebuild either file.
-            // The video is copied byte-for-byte and is not decoded, re-encoded or remuxed.
-            let pairedPhoto = dir.appendingPathComponent("paired.\(photoExt)")
-            let pairedVideo = dir.appendingPathComponent("paired.mov")
-            try? FileManager.default.removeItem(at: pairedPhoto)
-            try? FileManager.default.removeItem(at: pairedVideo)
-            try FileManager.default.copyItem(at: photoURL, to: pairedPhoto)
-            try FileManager.default.copyItem(at: videoURL, to: pairedVideo)
+            status = "Identificatori corretti. Mantengo HEIC e MOV originali..."
 
             let auth = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
             guard auth == .authorized || auth == .limited else {
@@ -155,7 +157,7 @@ struct ContentView: View {
             }
 
             status = "Importo la coppia nella libreria Foto..."
-            try await saveLivePhoto(photoURL: pairedPhoto, videoURL: pairedVideo)
+            try await saveLivePhoto(photoURL: photoURL, videoURL: videoURL)
             status = "✅ Live Photo creata. Controlla Foto."
         } catch {
             status = "❌ \(error.localizedDescription)"
@@ -169,8 +171,31 @@ struct ContentView: View {
         guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else {
             throw LivePhotoError.invalidPhoto
         }
-        let maker = properties[kCGImagePropertyMakerAppleDictionary] as? [String: Any]
-        return maker?["17"] as? String
+
+        // Apple stores the Live Photo pairing identifier in the MakerApple
+        // dictionary under key 17. The original file is read only; nothing is rewritten.
+        if let maker = properties[kCGImagePropertyMakerAppleDictionary] as? [AnyHashable: Any] {
+            for (key, value) in maker {
+                if String(describing: key) == "17" {
+                    if let string = value as? String, !string.isEmpty {
+                        return string
+                    }
+                    if let string = value as? NSString, !string.isEmpty {
+                        return string as String
+                    }
+                }
+            }
+        }
+
+        // Some ImageIO versions expose the MakerNote through the EXIF dictionary.
+        if let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any],
+           let makerData = exif[kCGImagePropertyExifMakerNote] {
+            // Do not attempt to rewrite/decode opaque maker-note data here.
+            // The public ImageIO MakerApple dictionary above is the preferred path.
+            _ = makerData
+        }
+
+        return nil
     }
 
     private func readVideoContentIdentifier(from url: URL) async throws -> String? {
@@ -189,14 +214,9 @@ struct ContentView: View {
         do {
             let asset = AVURLAsset(url: url)
             let metadata = try await asset.load(.metadata)
-
-            // There is no public AVMetadataIdentifier constant for
-            // com.apple.quicktime.still-image-time on the current SDK.
-            // Detect the metadata by its QuickTime key + metadata key space.
             for item in metadata {
-                let key = item.key as? String
-                let keySpace = item.keySpace?.rawValue
-                if key == "com.apple.quicktime.still-image-time" && keySpace == "mdta" {
+                if item.keySpace?.rawValue == "mdta",
+                   String(describing: item.key) == "com.apple.quicktime.still-image-time" {
                     return true
                 }
             }
@@ -231,8 +251,8 @@ struct ContentView: View {
     }
 
     enum LivePhotoError: LocalizedError {
-        case invalidInput
         case invalidPhoto
+        case invalidVideo
         case photoIdentifierMissing
         case videoIdentifierMissing
         case identifiersDoNotMatch(String, String)
@@ -242,12 +262,12 @@ struct ContentView: View {
 
         var errorDescription: String? {
             switch self {
-            case .invalidInput:
-                return "Impossibile leggere la foto o il video selezionato."
             case .invalidPhoto:
-                return "La foto non è un'immagine valida."
+                return "La foto non è un HEIC/JPEG valido."
+            case .invalidVideo:
+                return "Per questo test seleziona il MOV originale della Live Photo."
             case .photoIdentifierMissing:
-                return "L'HEIC non contiene l'asset identifier Apple della Live Photo."
+                return "L'HEIC non espone il pairing identifier Apple. Seleziona il file originale dall'app File, non una copia nella libreria Foto."
             case .videoIdentifierMissing:
                 return "Il MOV non contiene il content identifier Apple della Live Photo."
             case let .identifiersDoNotMatch(photo, video):
