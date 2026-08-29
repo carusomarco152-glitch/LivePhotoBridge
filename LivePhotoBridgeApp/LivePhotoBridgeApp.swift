@@ -101,7 +101,13 @@ struct ContentView: View {
     private func addAssetIdentifier(_ identifier: String, toImage source: URL, destination: URL) throws {
         guard let sourceRef = CGImageSourceCreateWithURL(source as CFURL, nil), let image = CGImageSourceCreateImageAtIndex(sourceRef, 0, nil), var properties = CGImageSourceCopyPropertiesAtIndex(sourceRef, 0, nil) as? [CFString: Any] else { throw LivePhotoError.invalidPhoto }
         guard let sourceType = CGImageSourceGetType(sourceRef), let destinationRef = CGImageDestinationCreateWithURL(destination as CFURL, sourceType, 1, nil) else { throw LivePhotoError.invalidPhoto }
-        properties[kCGImagePropertyMakerAppleDictionary] = ["17": identifier]
+
+        // Preserve every existing MakerApple entry and change only the asset identifier.
+        // In particular, do not replace the whole MakerApple dictionary with just key 17.
+        var makerApple = properties[kCGImagePropertyMakerAppleDictionary] as? [String: Any] ?? [:]
+        makerApple["17"] = identifier
+        properties[kCGImagePropertyMakerAppleDictionary] = makerApple
+
         CGImageDestinationAddImage(destinationRef, image, properties as CFDictionary)
         guard CGImageDestinationFinalize(destinationRef) else { throw LivePhotoError.invalidPhoto }
     }
@@ -151,9 +157,9 @@ struct ContentView: View {
             if writer.canAdd(input) { writer.add(input); audioInput = input }
         }
 
-        // Preserve the source's top-level metadata. Then replace/add only the metadata
-        // required to associate this movie with the still image. No ordinary source
-        // metadata is intentionally discarded here.
+        // Preserve all source top-level metadata. The only existing item we replace is
+        // Apple's content identifier, because it must match the still image's identifier.
+        // No other source metadata is intentionally removed or rewritten.
         var writerMetadata = asset.metadata
         writerMetadata.removeAll { $0.identifier == .quickTimeMetadataContentIdentifier }
         let identifierItem = AVMutableMetadataItem()
