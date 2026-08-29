@@ -3,9 +3,20 @@ import Photos
 import UniformTypeIdentifiers
 import ImageIO
 import AVFoundation
+import UIKit
 
 @main
 struct LivePhotoBridgeApp: App {
+    init() {
+        NSSetUncaughtExceptionHandler { exception in
+            let message = "\n\n=== UNCAUGHT EXCEPTION ===\nName: \(exception.name.rawValue)\nReason: \(exception.reason ?? "n/d")\nCall stack:\n\(exception.callStackSymbols.joined(separator: "\n"))"
+            let defaults = UserDefaults.standard
+            let previous = defaults.string(forKey: "LivePhotoBridgeDiagnosticLog") ?? ""
+            defaults.set(previous + message, forKey: "LivePhotoBridgeDiagnosticLog")
+            defaults.synchronize()
+        }
+    }
+
     var body: some Scene { WindowGroup { ContentView() } }
 }
 
@@ -15,7 +26,7 @@ struct ContentView: View {
     @State private var showFileImporter = false
     @State private var importerKind: ImportedKind = .photo
     @State private var status = "Seleziona direttamente i file originali HEIC/JPEG e MOV dall'app File."
-    @State private var diagnosticLog = ""
+    @State private var diagnosticLog = UserDefaults.standard.string(forKey: "LivePhotoBridgeDiagnosticLog") ?? ""
     @State private var isWorking = false
 
     private enum ImportedKind { case photo, video }
@@ -41,14 +52,18 @@ struct ContentView: View {
                 if !diagnosticLog.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
-                            Text("LOG DIAGNOSTICO").font(.caption.bold())
+                            Text("ULTIMO LOG DIAGNOSTICO").font(.caption.bold())
                             Spacer()
                             Button("Copia") { UIPasteboard.general.string = diagnosticLog }
                                 .font(.caption)
+                            Button("Cancella") {
+                                diagnosticLog = ""
+                                UserDefaults.standard.removeObject(forKey: "LivePhotoBridgeDiagnosticLog")
+                            }.font(.caption)
                         }
                         ScrollView {
                             Text(diagnosticLog).font(.system(.caption, design: .monospaced)).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled).padding(8)
-                        }.frame(maxHeight: 190).background(.secondary.opacity(0.1)).clipShape(RoundedRectangle(cornerRadius: 8))
+                        }.frame(maxHeight: 220).background(.secondary.opacity(0.1)).clipShape(RoundedRectangle(cornerRadius: 8))
                     }
                 }
                 Spacer()
@@ -62,6 +77,7 @@ struct ContentView: View {
     private func log(_ message: String) {
         let line = "[\(Date().formatted(date: .omitted, time: .standard))] \(message)"
         diagnosticLog += diagnosticLog.isEmpty ? line : "\n" + line
+        UserDefaults.standard.set(diagnosticLog, forKey: "LivePhotoBridgeDiagnosticLog")
     }
 
     private func handleImportedFile(_ result: Result<[URL], Error>, kind: ImportedKind) {
@@ -83,6 +99,7 @@ struct ContentView: View {
 
     private func importLivePhoto() async {
         diagnosticLog = ""
+        UserDefaults.standard.removeObject(forKey: "LivePhotoBridgeDiagnosticLog")
         guard let photoURL, let videoURL else { return }
         isWorking = true; defer { isWorking = false }
         do {
