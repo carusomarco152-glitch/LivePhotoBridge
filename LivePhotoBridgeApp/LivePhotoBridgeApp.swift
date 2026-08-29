@@ -13,7 +13,6 @@ struct LivePhotoBridgeApp: App {
 
 struct PickerPhotoFile: Transferable {
     let url: URL
-
     static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(contentType: .image) { item in
             SentTransferredFile(item.url)
@@ -29,7 +28,6 @@ struct PickerPhotoFile: Transferable {
 
 struct PickerVideoFile: Transferable {
     let url: URL
-
     static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(contentType: .movie) { item in
             SentTransferredFile(item.url)
@@ -140,9 +138,13 @@ struct ContentView: View {
         let asset = AVURLAsset(url: source)
         let tracks = try await asset.load(.tracks)
         guard let videoTrack = tracks.first(where: { $0.mediaType == .video }) else { throw LivePhotoError.invalidVideo }
-        let naturalSize = try await videoTrack.load(.naturalSize)
-        let transform = try await videoTrack.load(.preferredTransform)
 
+        let videoDescriptions = videoTrack.formatDescriptions
+        guard let videoFormat = videoDescriptions.first as? CMFormatDescription else {
+            throw LivePhotoError.videoReaderFailed
+        }
+
+        let transform = try await videoTrack.load(.preferredTransform)
         let reader = try AVAssetReader(asset: asset)
         let videoOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: nil)
         guard reader.canAdd(videoOutput) else { throw LivePhotoError.videoReaderFailed }
@@ -151,25 +153,35 @@ struct ContentView: View {
         let audioTrack = tracks.first(where: { $0.mediaType == .audio })
         var audioReader: AVAssetReader?
         var audioOutput: AVAssetReaderTrackOutput?
+        var audioFormat: CMFormatDescription?
         if let audioTrack {
             let ar = try AVAssetReader(asset: asset)
             let ao = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: nil)
-            if ar.canAdd(ao) { ar.add(ao); audioReader = ar; audioOutput = ao }
+            if ar.canAdd(ao) {
+                ar.add(ao)
+                audioReader = ar
+                audioOutput = ao
+                audioFormat = audioTrack.formatDescriptions.first as? CMFormatDescription
+            }
         }
 
         try? FileManager.default.removeItem(at: destination)
         let writer = try AVAssetWriter(outputURL: destination, fileType: .mov)
-        let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: nil)
+
+        let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: nil, sourceFormatHint: videoFormat)
         videoInput.transform = transform
         videoInput.expectsMediaDataInRealTime = false
         guard writer.canAdd(videoInput) else { throw LivePhotoError.videoWriterFailed }
         writer.add(videoInput)
 
         var audioInput: AVAssetWriterInput?
-        if audioTrack != nil {
-            let input = AVAssetWriterInput(mediaType: .audio, outputSettings: nil)
+        if let audioFormat {
+            let input = AVAssetWriterInput(mediaType: .audio, outputSettings: nil, sourceFormatHint: audioFormat)
             input.expectsMediaDataInRealTime = false
-            if writer.canAdd(input) { writer.add(input); audioInput = input }
+            if writer.canAdd(input) {
+                writer.add(input)
+                audioInput = input
+            }
         }
 
         let identifierItem = AVMutableMetadataItem()
@@ -187,8 +199,8 @@ struct ContentView: View {
         writer.startSession(atSourceTime: .zero)
 
         let stillItem = AVMutableMetadataItem()
-        stillItem.key = "com.apple.quicktime.still-image-time" as (NSCopying & NSObjectProtocol)
-        stillItem.keySpace = AVMetadataKeySpace.quickTimeMetadata
+        stillItem.key = "com.apple.quicktime.still-image-time" as NSString
+        stillItem.keySpace = .quickTimeMetadata
         stillItem.value = NSNumber(value: -1)
         stillItem.dataType = kCMMetadataBaseDataType_SInt8 as String
         guard metadataAdaptor.append(AVTimedMetadataGroup(
@@ -199,34 +211,62 @@ struct ContentView: View {
             throw LivePhotoError.metadataFailed
         }
 
-        guard reader.startReading() else { throw reader.error ?? LivePhotoError.videoReaderFailed }
-        videoInput.requestMediaDataWhenReady(on: DispatchQueue(label: "LivePhotoBridge.video")) {
+        guard reader.startReading() else {
+            writer.cancelWriting()
+            throw reader.error ?? LivePhotoError.videoReaderFailed
+        }
+        if let audioReader {
+            guard audioReader.startReading() else {
+                writer.cancelWriting()
+                throw audioReader.error ?? LivePhotoError.audioReaderFailed
+            }
+        }
+
+        let videoQueue = DispatchQueue(label: "LivePhotoBridge.video")
+        videoInput.requestMediaDataWhenReady(on: videoQueue) {
             while videoInput.isReadyForMoreMediaData {
                 guard let sample = videoOutput.copyNextSampleBuffer() else {
-                    videoInput.markAsFinished(); return
+                    videoInput.markAsFinished()
+                    return
                 }
                 if !videoInput.append(sample) {
-                    reader.cancelReading(); videoInput.markAsFinished(); return
+                    videoInput.markAsFinished()
+                    return
                 }
             }
         }
 
         if let audioReader, let audioOutput, let audioInput {
-            guard audioReader.startReading() else { throw audioReader.error ?? LivePhotoError.audioReaderFailed }
-            audioInput.requestMediaDataWhenReady(on: DispatchQueue(label: "LivePhotoBridge.audio")) {
+            let audioQueue = DispatchQueue(label: "LivePhotoBridge.audio")
+            audioInput.requestMediaDataWhenReady(on: audioQueue) {
                 while audioInput.isReadyForMoreMediaData {
                     guard let sample = audioOutput.copyNextSampleBuffer() else {
-                        audioInput.markAsFinished(); return
+                        audioInput.markAsFinished()
+                        return
                     }
                     if !audioInput.append(sample) {
-                        audioReader.cancelReading(); audioInput.markAsFinished(); return
+                        audioInput.markAsFinished()
+                        return
                     }
                 }
             }
         }
 
-        while writer.status == .writing { try await Task.sleep(for: .milliseconds(50)) }
-        guard writer.status == .completed else { throw writer.error ?? LivePhotoError.videoWriterFailed }
+        try await waitForWriterToFinish(writer, timeout: 120)
+        guard writer.status == .completed else {
+            throw writer.error ?? LivePhotoError.videoWriterFailed
+        }
+    }
+
+    private func waitForWriterToFinish(_ writer: AVAssetWriter, timeout: Double) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while writer.status == .writing {
+            if Date() > deadline {
+                writer.cancelWriting()
+                throw LivePhotoError.videoWriterTimeout
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
     }
 
     private func makeStillImageTimeInput() throws -> AVAssetWriterInput {
@@ -265,7 +305,7 @@ struct ContentView: View {
 
     enum LivePhotoError: LocalizedError {
         case invalidInput, invalidPhoto, invalidVideo, videoReaderFailed, videoWriterFailed
-        case audioReaderFailed, metadataFailed, creationFailed, photoLibraryDenied
+        case audioReaderFailed, metadataFailed, creationFailed, photoLibraryDenied, videoWriterTimeout
         var errorDescription: String? {
             switch self {
             case .invalidInput: return "Impossibile leggere foto o video selezionati."
@@ -277,6 +317,7 @@ struct ContentView: View {
             case .metadataFailed: return "Impossibile creare i metadati Live Photo."
             case .creationFailed: return "Foto non ha completato la creazione della Live Photo."
             case .photoLibraryDenied: return "Accesso alla libreria Foto non autorizzato."
+            case .videoWriterTimeout: return "La preparazione del video è rimasta bloccata oltre 2 minuti."
             }
         }
     }
