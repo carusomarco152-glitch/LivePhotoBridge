@@ -189,7 +189,18 @@ struct ContentView: View {
         do {
             let asset = AVURLAsset(url: url)
             let metadata = try await asset.load(.metadata)
-            return metadata.contains { $0.identifier == .quickTimeMetadataStillImageTime }
+
+            // There is no public AVMetadataIdentifier constant for
+            // com.apple.quicktime.still-image-time on the current SDK.
+            // Detect the metadata by its QuickTime key + metadata key space.
+            for item in metadata {
+                let key = item.key as? String
+                let keySpace = item.keySpace?.rawValue
+                if key == "com.apple.quicktime.still-image-time" && keySpace == "mdta" {
+                    return true
+                }
+            }
+            return false
         } catch {
             return false
         }
