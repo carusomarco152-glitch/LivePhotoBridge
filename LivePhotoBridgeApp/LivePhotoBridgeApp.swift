@@ -180,7 +180,7 @@ struct ContentView: View {
                     if let string = value as? String, !string.isEmpty {
                         return string
                     }
-                    if let string = value as? NSString, !string.isEmpty {
+                    if let string = value as? NSString, string.length > 0 {
                         return string as String
                     }
                 }
