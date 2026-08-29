@@ -46,11 +46,7 @@ struct ContentView: View {
         isWorking = true
         defer { isWorking = false }
         do {
-            status = "Leggo i file..."
-            guard let photoData = try await photoItem.loadTransferable(type: Data.self),
-                  let videoData = try await videoItem.loadTransferable(type: Data.self) else {
-                throw LivePhotoError.invalidInput
-            }
+            status = "Preparo i file..."
             let dir = FileManager.default.temporaryDirectory.appendingPathComponent("LivePhotoBridge", isDirectory: true)
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let identifier = UUID().uuidString.uppercased()
@@ -58,12 +54,17 @@ struct ContentView: View {
             let sourceVideo = dir.appendingPathComponent("source.mov")
             let pairedPhoto = dir.appendingPathComponent("paired.heic")
             let pairedVideo = dir.appendingPathComponent("paired.mov")
-            try photoData.write(to: sourcePhoto, options: .atomic)
-            try videoData.write(to: sourceVideo, options: .atomic)
+
+            // Do not load the entire movie into Data. PhotosPicker can hand us a
+            // temporary file, which avoids a large memory spike with 4K videos.
+            try await copyPickerFile(photoItem, to: sourcePhoto)
+            try await copyPickerFile(videoItem, to: sourceVideo)
+
             status = "Preparo la foto..."
             try addAssetIdentifier(identifier, toImage: sourcePhoto, destination: pairedPhoto)
             status = "Preparo il video e i metadati Live Photo..."
             try await createPairedVideo(from: sourceVideo, identifier: identifier, destination: pairedVideo)
+
             let auth = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
             guard auth == .authorized || auth == .limited else { throw LivePhotoError.photoLibraryDenied }
             status = "Salvo nella libreria Foto..."
@@ -72,6 +73,12 @@ struct ContentView: View {
         } catch {
             status = "❌ Errore: \(error.localizedDescription)"
         }
+    }
+
+    private func copyPickerFile(_ item: PhotosPickerItem, to destination: URL) async throws {
+        let temporaryURL = try await item.loadFileRepresentation(for: .data)
+        try? FileManager.default.removeItem(at: destination)
+        try FileManager.default.copyItem(at: temporaryURL, to: destination)
     }
 
     private func addAssetIdentifier(_ identifier: String, toImage source: URL, destination: URL) throws {
@@ -146,18 +153,18 @@ struct ContentView: View {
         guard writer.startWriting() else { throw writer.error ?? LivePhotoError.videoWriterFailed }
         writer.startSession(atSourceTime: .zero)
 
-        // Apple does not expose quickTimeMetadataStillImageTime as an
-        // AVMetadataIdentifier on the current SDK. The Live Photo timed
-        // metadata key is the raw QuickTime metadata key below.
         let stillItem = AVMutableMetadataItem()
         stillItem.key = "com.apple.quicktime.still-image-time" as (NSCopying & NSObjectProtocol)
         stillItem.keySpace = AVMetadataKeySpace.quickTimeMetadata
         stillItem.value = NSNumber(value: -1)
         stillItem.dataType = kCMMetadataBaseDataType_SInt8 as String
-        metadataAdaptor.append(AVTimedMetadataGroup(
+        guard metadataAdaptor.append(AVTimedMetadataGroup(
             items: [stillItem],
             timeRange: CMTimeRange(start: .zero, duration: CMTime(value: 1, timescale: 600))
-        ))
+        )) else {
+            writer.cancelWriting()
+            throw LivePhotoError.metadataFailed
+        }
 
         guard reader.startReading() else { throw reader.error ?? LivePhotoError.videoReaderFailed }
         videoInput.requestMediaDataWhenReady(on: DispatchQueue(label: "LivePhotoBridge.video")) {
@@ -185,8 +192,12 @@ struct ContentView: View {
             }
         }
 
-        while writer.status == .writing { try await Task.sleep(for: .milliseconds(50)) }
-        guard writer.status == .completed else { throw writer.error ?? LivePhotoError.videoWriterFailed }
+        while writer.status == .writing {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        guard writer.status == .completed else {
+            throw writer.error ?? LivePhotoError.videoWriterFailed
+        }
     }
 
     private func makeStillImageTimeInput() throws -> AVAssetWriterInput {
