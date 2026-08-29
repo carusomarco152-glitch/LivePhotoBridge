@@ -15,13 +15,14 @@ struct ContentView: View {
     @State private var showFileImporter = false
     @State private var importerKind: ImportedKind = .photo
     @State private var status = "Seleziona direttamente i file originali HEIC/JPEG e MOV dall'app File."
+    @State private var diagnosticLog = ""
     @State private var isWorking = false
 
     private enum ImportedKind { case photo, video }
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
+            VStack(spacing: 14) {
                 Image(systemName: "livephoto").font(.system(size: 64))
                 Text("Live Photo Bridge").font(.largeTitle.bold())
                 Text("Ricostruisce una Live Photo usando i file originali, senza ricodificare il video.")
@@ -37,12 +38,30 @@ struct ContentView: View {
                     else { Label("Crea Live Photo", systemImage: "wand.and.stars").frame(maxWidth: .infinity) }
                 }.buttonStyle(.borderedProminent).disabled(photoURL == nil || videoURL == nil || isWorking)
                 Text(status).font(.footnote).multilineTextAlignment(.center).foregroundStyle(.secondary)
+                if !diagnosticLog.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("LOG DIAGNOSTICO").font(.caption.bold())
+                            Spacer()
+                            Button("Copia") { UIPasteboard.general.string = diagnosticLog }
+                                .font(.caption)
+                        }
+                        ScrollView {
+                            Text(diagnosticLog).font(.system(.caption, design: .monospaced)).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled).padding(8)
+                        }.frame(maxHeight: 190).background(.secondary.opacity(0.1)).clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                }
                 Spacer()
             }.padding().navigationTitle("Live Photo Bridge")
             .fileImporter(isPresented: $showFileImporter, allowedContentTypes: importerKind == .photo ? [.heic, .jpeg] : [.movie], allowsMultipleSelection: false) { result in
                 handleImportedFile(result, kind: importerKind)
             }
         }
+    }
+
+    private func log(_ message: String) {
+        let line = "[\(Date().formatted(date: .omitted, time: .standard))] \(message)"
+        diagnosticLog += diagnosticLog.isEmpty ? line : "\n" + line
     }
 
     private func handleImportedFile(_ result: Result<[URL], Error>, kind: ImportedKind) {
@@ -63,25 +82,39 @@ struct ContentView: View {
     }
 
     private func importLivePhoto() async {
+        diagnosticLog = ""
         guard let photoURL, let videoURL else { return }
         isWorking = true; defer { isWorking = false }
         do {
+            log("Avvio procedura.")
             status = "Leggo i file originali..."
             guard ["heic", "jpg", "jpeg"].contains(photoURL.pathExtension.lowercased()) else { throw LivePhotoError.invalidPhoto }
             guard videoURL.pathExtension.lowercased() == "mov" else { throw LivePhotoError.invalidVideo }
+            log("File validati: HEIC/JPEG + MOV.")
             status = "Controllo gli identificatori Apple..."
+            log("Lettura identificatore HEIC...")
             guard let photoIdentifier = try readPhotoAssetIdentifier(from: photoURL) else { throw LivePhotoError.photoIdentifierMissing }
+            log("HEIC identifier: \(photoIdentifier)")
+            log("Lettura content identifier MOV...")
             guard let videoIdentifier = try await readVideoContentIdentifier(from: videoURL) else { throw LivePhotoError.videoIdentifierMissing }
+            log("MOV identifier: \(videoIdentifier)")
             guard photoIdentifier.caseInsensitiveCompare(videoIdentifier) == .orderedSame else { throw LivePhotoError.identifiersDoNotMatch(photoIdentifier, videoIdentifier) }
-            _ = await videoContainsStillImageTime(videoURL)
-
+            log("Identificatori corrispondono.")
+            let hasStillImageTime = await videoContainsStillImageTime(videoURL)
+            log("still-image-time rilevato: \(hasStillImageTime ? "SI" : "NO")")
+            log("Richiesta autorizzazione Foto...")
             let auth = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            log("Risposta autorizzazione Foto: \(auth.rawValue)")
             guard auth == .authorized || auth == .limited else { throw LivePhotoError.photoLibraryDenied }
-
+            log("Autorizzazione concessa. Avvio PHAssetCreationRequest...")
             status = "Importo la coppia nella libreria Foto..."
             try await saveLivePhoto(photoURL: photoURL, videoURL: videoURL)
+            log("PHAssetCreationRequest completata con successo.")
             status = "✅ Live Photo creata. Controlla Foto."
-        } catch { status = "❌ \(error.localizedDescription)" }
+        } catch {
+            log("ERRORE: \(error.localizedDescription)")
+            status = "❌ \(error.localizedDescription)"
+        }
     }
 
     private func readPhotoAssetIdentifier(from url: URL) throws -> String? {
