@@ -102,7 +102,8 @@ struct ContentView: View {
         let asset = AVURLAsset(url: source)
         let tracks = try await asset.load(.tracks)
         guard let videoTrack = tracks.first(where: { $0.mediaType == .video }) else { throw LivePhotoError.invalidVideo }
-        guard let videoFormat = videoTrack.formatDescriptions.first else { throw LivePhotoError.videoReaderFailed }
+        guard let firstVideoDescription = videoTrack.formatDescriptions.first else { throw LivePhotoError.videoReaderFailed }
+        let videoFormat = firstVideoDescription as! CMFormatDescription
         let transform = try await videoTrack.load(.preferredTransform)
         let reader = try AVAssetReader(asset: asset)
         let videoOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: nil)
@@ -119,7 +120,9 @@ struct ContentView: View {
                 ar.add(ao)
                 audioReader = ar
                 audioOutput = ao
-                audioFormat = audioTrack.formatDescriptions.first
+                if let firstAudioDescription = audioTrack.formatDescriptions.first {
+                    audioFormat = firstAudioDescription as! CMFormatDescription
+                }
             }
         }
         try? FileManager.default.removeItem(at: destination)
