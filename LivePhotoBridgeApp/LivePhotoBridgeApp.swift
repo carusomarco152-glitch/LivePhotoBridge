@@ -4,10 +4,52 @@ import PhotosUI
 import ImageIO
 import AVFoundation
 import UniformTypeIdentifiers
+import CoreTransferable
 
 @main
 struct LivePhotoBridgeApp: App {
     var body: some Scene { WindowGroup { ContentView() } }
+}
+
+struct PickerPhotoFile: Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .image) { item in
+            SentTransferredFile(item.url)
+        } importing: { received in
+            let destination = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension(received.file.pathExtension)
+            try FileManager.default.copyItem(at: received.file, to: destination)
+            return PickerPhotoFile(url: destination)
+        }
+    }
+}
+
+struct PickerVideoFile: Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .movie) { item in
+            SentTransferredFile(item.url)
+        } importing: { received in
+            let destination = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension(received.file.pathExtension)
+            try FileManager.default.copyItem(at: received.file, to: destination)
+            return PickerVideoFile(url: destination)
+        }
+        FileRepresentation(contentType: .quickTimeMovie) { item in
+            SentTransferredFile(item.url)
+        } importing: { received in
+            let destination = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension(received.file.pathExtension)
+            try FileManager.default.copyItem(at: received.file, to: destination)
+            return PickerVideoFile(url: destination)
+        }
+    }
 }
 
 struct ContentView: View {
@@ -55,10 +97,14 @@ struct ContentView: View {
             let pairedPhoto = dir.appendingPathComponent("paired.heic")
             let pairedVideo = dir.appendingPathComponent("paired.mov")
 
-            // Do not load the entire movie into Data. PhotosPicker can hand us a
-            // temporary file, which avoids a large memory spike with 4K videos.
-            try await copyPickerFile(photoItem, to: sourcePhoto)
-            try await copyPickerFile(videoItem, to: sourceVideo)
+            guard let pickedPhoto = try await photoItem.loadTransferable(type: PickerPhotoFile.self),
+                  let pickedVideo = try await videoItem.loadTransferable(type: PickerVideoFile.self) else {
+                throw LivePhotoError.invalidInput
+            }
+            try? FileManager.default.removeItem(at: sourcePhoto)
+            try? FileManager.default.removeItem(at: sourceVideo)
+            try FileManager.default.copyItem(at: pickedPhoto.url, to: sourcePhoto)
+            try FileManager.default.copyItem(at: pickedVideo.url, to: sourceVideo)
 
             status = "Preparo la foto..."
             try addAssetIdentifier(identifier, toImage: sourcePhoto, destination: pairedPhoto)
@@ -73,12 +119,6 @@ struct ContentView: View {
         } catch {
             status = "❌ Errore: \(error.localizedDescription)"
         }
-    }
-
-    private func copyPickerFile(_ item: PhotosPickerItem, to destination: URL) async throws {
-        let temporaryURL = try await item.loadFileRepresentation(for: .data)
-        try? FileManager.default.removeItem(at: destination)
-        try FileManager.default.copyItem(at: temporaryURL, to: destination)
     }
 
     private func addAssetIdentifier(_ identifier: String, toImage source: URL, destination: URL) throws {
@@ -104,10 +144,7 @@ struct ContentView: View {
         let transform = try await videoTrack.load(.preferredTransform)
 
         let reader = try AVAssetReader(asset: asset)
-        let videoOutput = AVAssetReaderTrackOutput(
-            track: videoTrack,
-            outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
-        )
+        let videoOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: nil)
         guard reader.canAdd(videoOutput) else { throw LivePhotoError.videoReaderFailed }
         reader.add(videoOutput)
 
@@ -122,11 +159,7 @@ struct ContentView: View {
 
         try? FileManager.default.removeItem(at: destination)
         let writer = try AVAssetWriter(outputURL: destination, fileType: .mov)
-        let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: [
-            AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: Int(naturalSize.width),
-            AVVideoHeightKey: Int(naturalSize.height)
-        ])
+        let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: nil)
         videoInput.transform = transform
         videoInput.expectsMediaDataInRealTime = false
         guard writer.canAdd(videoInput) else { throw LivePhotoError.videoWriterFailed }
@@ -192,12 +225,8 @@ struct ContentView: View {
             }
         }
 
-        while writer.status == .writing {
-            try await Task.sleep(for: .milliseconds(50))
-        }
-        guard writer.status == .completed else {
-            throw writer.error ?? LivePhotoError.videoWriterFailed
-        }
+        while writer.status == .writing { try await Task.sleep(for: .milliseconds(50)) }
+        guard writer.status == .completed else { throw writer.error ?? LivePhotoError.videoWriterFailed }
     }
 
     private func makeStillImageTimeInput() throws -> AVAssetWriterInput {
