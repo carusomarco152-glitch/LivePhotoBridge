@@ -139,11 +139,15 @@ struct ContentView: View {
             guard photoIdentifier.caseInsensitiveCompare(videoIdentifier) == .orderedSame else {
                 throw LivePhotoError.identifiersDoNotMatch(photoIdentifier, videoIdentifier)
             }
-            guard await videoContainsStillImageTime(videoURL) else {
-                throw LivePhotoError.stillImageTimeMissing
-            }
 
-            status = "Identificatori corretti. Mantengo HEIC e MOV originali..."
+            // still-image-time viene mantenuto nel MOV originale e non viene mai riscritto.
+            // AVFoundation non espone sempre questo timed metadata tramite asset.load(.metadata),
+            // quindi la sua assenza dalla lettura diagnostica non deve bloccare l'importazione.
+            let stillImageTimeDetected = await videoContainsStillImageTime(videoURL)
+            status = stillImageTimeDetected
+                ? "Coppia verificata. Mantengo HEIC e MOV originali..."
+                : "Coppia verificata. Mantengo HEIC e MOV originali... (metadata timed non leggibile dal controllo diagnostico)"
+
             let auth = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
             guard auth == .authorized || auth == .limited else {
                 throw LivePhotoError.photoLibraryDenied
