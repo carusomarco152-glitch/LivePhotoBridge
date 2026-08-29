@@ -159,6 +159,10 @@ struct ContentView: View {
             writer.cancelWriting()
             throw LivePhotoError.metadataFailed
         }
+        // The metadata input is an independent writer input. It must be explicitly
+        // finished; otherwise AVAssetWriter remains in .writing forever waiting for
+        // another sample and the app appears frozen at "Preparo il video...".
+        metadataInput.markAsFinished()
         guard reader.startReading() else {
             writer.cancelWriting()
             throw reader.error ?? LivePhotoError.videoReaderFailed
