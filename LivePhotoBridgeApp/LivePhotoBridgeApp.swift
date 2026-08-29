@@ -20,6 +20,7 @@ struct LivePhotoBridgeApp: App {
     var body: some Scene { WindowGroup { ContentView() } }
 }
 
+@MainActor
 struct ContentView: View {
     @State private var photoURL: URL?
     @State private var videoURL: URL?
@@ -165,18 +166,31 @@ struct ContentView: View {
     }
 
     private func saveLivePhoto(photoURL: URL, videoURL: URL) async throws {
+        log("saveLivePhoto(): ingresso.")
+        log("Preparazione PHAssetCreationRequest...")
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            log("Chiamata PHPhotoLibrary.performChanges()...")
             PHPhotoLibrary.shared().performChanges({
+                self.log("Dentro performChanges: creo PHAssetCreationRequest...")
                 let request = PHAssetCreationRequest.forAsset()
-                let photoOptions = PHAssetResourceCreationOptions(); photoOptions.shouldMoveFile = false
+                self.log("PHAssetCreationRequest creata.")
+                let photoOptions = PHAssetResourceCreationOptions()
+                photoOptions.shouldMoveFile = false
+                self.log("Aggiungo risorsa PHOTO: \(photoURL.lastPathComponent)")
                 request.addResource(with: .photo, fileURL: photoURL, options: photoOptions)
-                let videoOptions = PHAssetResourceCreationOptions(); videoOptions.shouldMoveFile = false
+                self.log("Risorsa PHOTO aggiunta.")
+                let videoOptions = PHAssetResourceCreationOptions()
+                videoOptions.shouldMoveFile = false
+                self.log("Aggiungo risorsa PAIRED VIDEO: \(videoURL.lastPathComponent)")
                 request.addResource(with: .pairedVideo, fileURL: videoURL, options: videoOptions)
+                self.log("Risorsa PAIRED VIDEO aggiunta.")
             }) { success, error in
+                self.log("Completion PHPhotoLibrary.performChanges(): success=\(success), error=\(error?.localizedDescription ?? "nil")")
                 if let error { continuation.resume(throwing: error) }
                 else if success { continuation.resume(returning: ()) }
                 else { continuation.resume(throwing: LivePhotoError.creationFailed) }
             }
+            self.log("performChanges() chiamato.")
         }
     }
 
