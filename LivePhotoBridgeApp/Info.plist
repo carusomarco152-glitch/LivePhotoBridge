@@ -15,13 +15,15 @@
     <key>CFBundleShortVersionString</key>
     <string>1.0</string>
     <key>CFBundleVersion</key>
-    <string>2</string>
+    <string>3</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
     <key>NSPhotoLibraryAddUsageDescription</key>
-    <string>Live Photo Bridge deve salvare la Live Photo ricreata nella libreria Foto.</string>
+    <string>Live Photo Bridge deve salvare i contenuti importati nella libreria Foto.</string>
     <key>NSPhotoLibraryUsageDescription</key>
-    <string>Live Photo Bridge deve accedere alla libreria Foto per selezionare i file.</string>
+    <string>Live Photo Bridge deve accedere alla libreria Foto per importare e verificare i contenuti.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Live Photo Bridge usa la rete locale per ricevere dal PC i file selezionati nel browser.</string>
     <key>UILaunchScreen</key>
     <dict/>
     <key>UIDeviceFamily</key>
