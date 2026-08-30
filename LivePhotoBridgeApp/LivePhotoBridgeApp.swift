@@ -420,5 +420,5 @@ $('files').onchange=e=>ingest(e.target.files);$('folder').onchange=e=>ingest(e.t
 async function uploadOne(f,g,includeAAE){let h={'Content-Type':f.type||'application/octet-stream','Content-Length':String(f.size),'X-LPB-Filename':encodeURIComponent(f.name),'X-LPB-Category':encodeURIComponent(g.type),'X-LPB-Group':encodeURIComponent(g.key),'X-LPB-AAE':includeAAE?'true':'false'};let r=await fetch('/upload',{method:'POST',headers:h,body:f});if(!r.ok)throw new Error(f.name+' HTTP '+r.status);}
 async function uploadAll(){let todo=[];for(const g of state.groups){for(const f of g.files){if(ext(f.name)==='aae'&&!g.includeAAE)continue;todo.push({f,g,includeAAE:g.includeAAE})}}$('progress').textContent='Trasferimento 0/'+todo.length;log('Avvio trasferimento di '+todo.length+' file.');let n=0;for(const x of todo){try{await uploadOne(x.f,x.g,x.includeAAE);n++;$('progress').textContent='Trasferimento '+n+'/'+todo.length;log('OK '+x.f.name+' → iPhone inbox');}catch(e){log('ERRORE '+e.message);}}log('Trasferimento terminato: '+n+'/'+todo.length+' riusciti.');}
 </script></body></html>
-"""
+"""#
 }
