@@ -17,6 +17,7 @@ struct ContentView: View {
     @State private var diagnosticLog = UserDefaults.standard.string(forKey: "LivePhotoBridge.log") ?? ""
     @State private var createdLivePhotoIdentifier: String?
     @State private var showExportPicker = false
+    @State private var exportFolderURL: URL?
     private enum ImportedKind { case photo, video }
     var body: some View {
         NavigationStack { ScrollView { VStack(spacing: 16) {
@@ -32,9 +33,8 @@ struct ContentView: View {
             Button { Task { await testVideoOnly() } } label: { Label("Importa solo video", systemImage: "video.badge.plus").frame(maxWidth: .infinity) }.buttonStyle(.bordered)
             Text("Test 3 – Live Photo").font(.headline)
             Button { Task { await testLivePhotoPair() } } label: { Label("Importa coppia HEIC + MOV", systemImage: "livephoto.badge.automatic").frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent)
-            if createdLivePhotoIdentifier != nil {
-                Button { Task { await exportCreatedLivePhotoResources() } } label: { Label("Esporta risorse Live Photo", systemImage: "square.and.arrow.down").frame(maxWidth: .infinity) }.buttonStyle(.bordered)
-            }
+            Button { Task { await exportCreatedLivePhotoResources() } } label: { Label("Esporta risorse Live Photo", systemImage: "square.and.arrow.down").frame(maxWidth: .infinity) }.buttonStyle(.bordered).disabled(createdLivePhotoIdentifier == nil || isWorking)
+            Text(createdLivePhotoIdentifier == nil ? "Il pulsante si abilita dopo aver creato una Live Photo con il Test 3." : "Live Photo pronta: puoi esportarne le due risorse originali.").font(.footnote).multilineTextAlignment(.center).foregroundStyle(.secondary)
             Text(status).font(.footnote).multilineTextAlignment(.center).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 8) {
                 HStack { Text("Log diagnostico").font(.headline); Spacer(); Button("Copia") { UIPasteboard.general.string = diagnosticLog }; Button("Cancella") { diagnosticLog = ""; UserDefaults.standard.removeObject(forKey: "LivePhotoBridge.log") } }
@@ -42,7 +42,7 @@ struct ContentView: View {
             }
         }.padding() }.navigationTitle("Live Photo Bridge")
         .fileImporter(isPresented: $showFileImporter, allowedContentTypes: importerKind == .photo ? [.heic, .jpeg] : [.movie], allowsMultipleSelection: false) { result in handleImportedFile(result, kind: importerKind) }
-        .sheet(isPresented: $showExportPicker) { ExportDocumentPicker() }
+        .sheet(isPresented: $showExportPicker) { if let exportFolderURL { ExportDocumentPicker(folderURL: exportFolderURL) } }
         }
     }
     private func log(_ message: String) { let line = "[\(Date().formatted(date: .omitted, time: .standard))] \(message)"; diagnosticLog += line + "\n"; UserDefaults.standard.set(diagnosticLog, forKey: "LivePhotoBridge.log") }
@@ -96,6 +96,7 @@ struct ContentView: View {
             log("Risorse trovate. Estraggo direttamente PhotoKit senza ricodifica...")
             try await PhotoKitTestHelper.exportResource(photoResource, to: photoOut)
             try await PhotoKitTestHelper.exportResource(videoResource, to: videoOut)
+            exportFolderURL = folder
             log("Esportazione completata: HEIC + MOV.")
             status = "✅ Risorse estratte. Scegli ora dove salvarle in File."
             showExportPicker = true
@@ -105,7 +106,8 @@ struct ContentView: View {
 }
 
 private struct ExportDocumentPicker: UIViewControllerRepresentable {
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController { UIDocumentPickerViewController(forExporting: [], asCopy: true) }
+    let folderURL: URL
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController { UIDocumentPickerViewController(forExporting: [folderURL], asCopy: true) }
     func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
 }
 
