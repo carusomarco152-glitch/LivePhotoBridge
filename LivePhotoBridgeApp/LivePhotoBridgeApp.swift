@@ -17,7 +17,7 @@ struct ContentView: View {
     @State private var diagnosticLog = UserDefaults.standard.string(forKey: "LivePhotoBridge.log") ?? ""
     @State private var createdLivePhotoIdentifier: String?
     @State private var showExportPicker = false
-    @State private var exportFolderURL: URL?
+    @State private var exportURLs: [URL] = []
     private enum ImportedKind { case photo, video }
     var body: some View {
         NavigationStack { ScrollView { VStack(spacing: 16) {
@@ -42,7 +42,7 @@ struct ContentView: View {
             }
         }.padding() }.navigationTitle("Live Photo Bridge")
         .fileImporter(isPresented: $showFileImporter, allowedContentTypes: importerKind == .photo ? [.heic, .jpeg] : [.movie], allowsMultipleSelection: false) { result in handleImportedFile(result, kind: importerKind) }
-        .sheet(isPresented: $showExportPicker) { if let exportFolderURL { ExportDocumentPicker(folderURL: exportFolderURL) } }
+        .sheet(isPresented: $showExportPicker) { if !exportURLs.isEmpty { ExportDocumentPicker(urls: exportURLs) } }
         }
     }
     private func log(_ message: String) { let line = "[\(Date().formatted(date: .omitted, time: .standard))] \(message)"; diagnosticLog += line + "\n"; UserDefaults.standard.set(diagnosticLog, forKey: "LivePhotoBridge.log") }
@@ -96,9 +96,9 @@ struct ContentView: View {
             log("Risorse trovate. Estraggo direttamente PhotoKit senza ricodifica...")
             try await PhotoKitTestHelper.exportResource(photoResource, to: photoOut)
             try await PhotoKitTestHelper.exportResource(videoResource, to: videoOut)
-            exportFolderURL = folder
-            log("Esportazione completata: HEIC + MOV.")
-            status = "✅ Risorse estratte. Scegli ora dove salvarle in File."
+            exportURLs = [photoOut, videoOut]
+            log("Esportazione completata: HEIC + MOV pronti per il salvataggio.")
+            status = "✅ Risorse estratte. Scegli la destinazione in File."
             showExportPicker = true
         } catch { status = "❌ Esportazione: \(error.localizedDescription)"; log("ESPORTAZIONE ERRORE: \(error.localizedDescription)") }
     }
@@ -106,8 +106,8 @@ struct ContentView: View {
 }
 
 private struct ExportDocumentPicker: UIViewControllerRepresentable {
-    let folderURL: URL
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController { UIDocumentPickerViewController(forExporting: [folderURL], asCopy: true) }
+    let urls: [URL]
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController { UIDocumentPickerViewController(forExporting: urls, asCopy: true) }
     func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
 }
 
