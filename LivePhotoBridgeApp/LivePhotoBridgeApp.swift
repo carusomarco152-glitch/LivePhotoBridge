@@ -61,27 +61,55 @@ struct ContentView: View {
         } catch { status = "❌ Test foto: \(error.localizedDescription)"; log("TEST 1 ERRORE: \(error.localizedDescription)") }
     }
     private func testVideoOnly() async {
-        guard let videoURL else { status = "Seleziona prima il MOV."; return }; isWorking = true; defer { isWorking = false }; log("=== TEST 2: SOLO VIDEO ===")
-        do { try await ensurePhotoAuthorization(); log("Chiamo performChanges per un solo video..."); try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in PHPhotoLibrary.shared().performChanges({ let request = PHAssetCreationRequest.forAsset(); self.log("PHAssetCreationRequest VIDEO creata."); request.addResource(with: .video, fileURL: videoURL, options: nil); self.log("Risorsa VIDEO aggiunta.") }, completionHandler: { success, error in if let error { self.log("VIDEO completion ERROR: \(error.localizedDescription)"); continuation.resume(throwing: error) } else if success { self.log("VIDEO completion SUCCESS."); continuation.resume(returning: ()) } else { self.log("VIDEO completion FALLITA senza errore."); continuation.resume(throwing: LivePhotoError.creationFailed) } }); self.log("performChanges VIDEO chiamato.") }; status = "✅ Test video completato." } catch { status = "❌ Test video: \(error.localizedDescription)"; log("TEST 2 ERRORE: \(error.localizedDescription)") }
+        guard let videoURL else { status = "Seleziona prima il MOV."; return }
+        isWorking = true; defer { isWorking = false }; log("=== TEST 2: SOLO VIDEO ===")
+        do {
+            try await ensurePhotoAuthorization()
+            log("Chiamo performChanges per un solo video...")
+            try await PhotoKitTestHelper.saveVideo(at: videoURL)
+            log("VIDEO completion SUCCESS.")
+            status = "✅ Test video completato."
+        } catch { status = "❌ Test video: \(error.localizedDescription)"; log("TEST 2 ERRORE: \(error.localizedDescription)") }
     }
     private func testLivePhotoPair() async {
-        guard let photoURL, let videoURL else { status = "Seleziona prima HEIC/JPEG e MOV."; return }; isWorking = true; defer { isWorking = false }; log("=== TEST 3: LIVE PHOTO ===")
-        do { try await ensurePhotoAuthorization(); let resources = [NSNumber(value: PHAssetResourceType.photo.rawValue), NSNumber(value: PHAssetResourceType.pairedVideo.rawValue)]; let supported = PHAssetCreationRequest.supportsAssetResourceTypes(resources); log("Preflight coppia: \(supported ? "SUPPORTATO" : "NON SUPPORTATO")"); guard supported else { throw LivePhotoError.unsupportedResourceCombination }; try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in PHPhotoLibrary.shared().performChanges({ self.log("Dentro change block LIVE PHOTO."); let request = PHAssetCreationRequest.forAsset(); self.log("PHAssetCreationRequest LIVE PHOTO creata."); request.addResource(with: .photo, fileURL: photoURL, options: nil); self.log("PHOTO aggiunta."); request.addResource(with: .pairedVideo, fileURL: videoURL, options: nil); self.log("PAIRED VIDEO aggiunto.") }, completionHandler: { success, error in if let error { self.log("LIVE PHOTO completion ERROR: \(error.localizedDescription)"); continuation.resume(throwing: error) } else if success { self.log("LIVE PHOTO completion SUCCESS."); continuation.resume(returning: ()) } else { self.log("LIVE PHOTO completion FALLITA senza errore."); continuation.resume(throwing: LivePhotoError.creationFailed) } }); self.log("performChanges LIVE PHOTO chiamato.") }; status = "✅ Test Live Photo completato." } catch { status = "❌ Test Live Photo: \(error.localizedDescription)"; log("TEST 3 ERRORE: \(error.localizedDescription)") }
+        guard let photoURL, let videoURL else { status = "Seleziona prima HEIC/JPEG e MOV."; return }
+        isWorking = true; defer { isWorking = false }; log("=== TEST 3: LIVE PHOTO ===")
+        do {
+            try await ensurePhotoAuthorization()
+            let resources = [NSNumber(value: PHAssetResourceType.photo.rawValue), NSNumber(value: PHAssetResourceType.pairedVideo.rawValue)]
+            let supported = PHAssetCreationRequest.supportsAssetResourceTypes(resources)
+            log("Preflight coppia: \(supported ? "SUPPORTATO" : "NON SUPPORTATO")")
+            guard supported else { throw LivePhotoError.unsupportedResourceCombination }
+            log("Chiamo performChanges LIVE PHOTO senza catturare ContentView...")
+            try await PhotoKitTestHelper.saveLivePhoto(photoURL: photoURL, videoURL: videoURL)
+            log("LIVE PHOTO completion SUCCESS.")
+            status = "✅ Test Live Photo completato."
+        } catch { status = "❌ Test Live Photo: \(error.localizedDescription)"; log("TEST 3 ERRORE: \(error.localizedDescription)") }
     }
     enum LivePhotoError: LocalizedError { case invalidPhoto, unsupportedResourceCombination, creationFailed, photoLibraryDenied; var errorDescription: String? { switch self { case .invalidPhoto: return "Il file foto non può essere aperto come immagine."; case .unsupportedResourceCombination: return "Photos non supporta questa combinazione di risorse."; case .creationFailed: return "Photos non ha completato la creazione."; case .photoLibraryDenied: return "Accesso alla libreria Foto non autorizzato." } } }
 }
 
-private enum PhotoKitTestError: Error {
-    case requestCreationFailed
-}
+private enum PhotoKitTestError: Error { case requestCreationFailed }
 
 private nonisolated enum PhotoKitTestHelper {
     static nonisolated func savePhoto(at url: URL) async throws {
         try await PHPhotoLibrary.shared().performChanges {
-            guard PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url) != nil else {
-                // Throwing is not available from a PhotoKit change block; use an Objective-C exception-free optional check.
-                return
-            }
+            guard PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url) != nil else { return }
+        }
+    }
+
+    static nonisolated func saveVideo(at url: URL) async throws {
+        try await PHPhotoLibrary.shared().performChanges {
+            let request = PHAssetCreationRequest.forAsset()
+            request.addResource(with: .video, fileURL: url, options: nil)
+        }
+    }
+
+    static nonisolated func saveLivePhoto(photoURL: URL, videoURL: URL) async throws {
+        try await PHPhotoLibrary.shared().performChanges {
+            let request = PHAssetCreationRequest.forAsset()
+            request.addResource(with: .photo, fileURL: photoURL, options: nil)
+            request.addResource(with: .pairedVideo, fileURL: videoURL, options: nil)
         }
     }
 }
