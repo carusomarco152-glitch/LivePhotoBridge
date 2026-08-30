@@ -16,7 +16,6 @@ struct ContentView: View {
     @State private var isWorking = false
     @State private var diagnosticLog = UserDefaults.standard.string(forKey: "LivePhotoBridge.log") ?? ""
     @State private var createdLivePhotoIdentifier: String?
-    @State private var exportFolderURL: URL?
     @State private var showExportPicker = false
     private enum ImportedKind { case photo, video }
     var body: some View {
@@ -34,10 +33,7 @@ struct ContentView: View {
             Text("Test 3 – Live Photo").font(.headline)
             Button { Task { await testLivePhotoPair() } } label: { Label("Importa coppia HEIC + MOV", systemImage: "livephoto.badge.automatic").frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent)
             if createdLivePhotoIdentifier != nil {
-                Button { Task { await exportCreatedLivePhotoResources() } } label: {
-                    Label("Esporta risorse Live Photo", systemImage: "square.and.arrow.down")
-                        .frame(maxWidth: .infinity)
-                }.buttonStyle(.bordered)
+                Button { Task { await exportCreatedLivePhotoResources() } } label: { Label("Esporta risorse Live Photo", systemImage: "square.and.arrow.down").frame(maxWidth: .infinity) }.buttonStyle(.bordered)
             }
             Text(status).font(.footnote).multilineTextAlignment(.center).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 8) {
@@ -46,9 +42,7 @@ struct ContentView: View {
             }
         }.padding() }.navigationTitle("Live Photo Bridge")
         .fileImporter(isPresented: $showFileImporter, allowedContentTypes: importerKind == .photo ? [.heic, .jpeg] : [.movie], allowsMultipleSelection: false) { result in handleImportedFile(result, kind: importerKind) }
-        .sheet(isPresented: $showExportPicker) {
-            if let exportFolderURL { DocumentExportPicker(url: exportFolderURL) }
-        }
+        .sheet(isPresented: $showExportPicker) { ExportDocumentPicker() }
         }
     }
     private func log(_ message: String) { let line = "[\(Date().formatted(date: .omitted, time: .standard))] \(message)"; diagnosticLog += line + "\n"; UserDefaults.standard.set(diagnosticLog, forKey: "LivePhotoBridge.log") }
@@ -95,25 +89,23 @@ struct ContentView: View {
             guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil).firstObject else { throw LivePhotoError.assetNotFound }
             let resources = PHAssetResource.assetResources(for: asset)
             guard let photoResource = resources.first(where: { $0.type == .photo }), let videoResource = resources.first(where: { $0.type == .pairedVideo }) else { throw LivePhotoError.resourcesNotFound }
-            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("LivePhotoBridge_Export_\(Date().formatted(.iso8601.year().month().day().dateTime.hour().minute().second()))", isDirectory: true)
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("LivePhotoBridge_Export_\(Date().formatted(.iso8601))", isDirectory: true)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let photoOut = folder.appendingPathComponent("created_photo.heic")
             let videoOut = folder.appendingPathComponent("created_video.mov")
             log("Risorse trovate. Estraggo direttamente PhotoKit senza ricodifica...")
             try await PhotoKitTestHelper.exportResource(photoResource, to: photoOut)
             try await PhotoKitTestHelper.exportResource(videoResource, to: videoOut)
-            exportFolderURL = folder
             log("Esportazione completata: HEIC + MOV.")
-            status = "✅ Risorse estratte senza conversione. Tocca di nuovo per esportarle in File."
+            status = "✅ Risorse estratte. Scegli ora dove salvarle in File."
             showExportPicker = true
         } catch { status = "❌ Esportazione: \(error.localizedDescription)"; log("ESPORTAZIONE ERRORE: \(error.localizedDescription)") }
     }
     enum LivePhotoError: LocalizedError { case invalidPhoto, unsupportedResourceCombination, creationFailed, photoLibraryDenied, assetNotFound, resourcesNotFound; var errorDescription: String? { switch self { case .invalidPhoto: return "Il file foto non può essere aperto come immagine."; case .unsupportedResourceCombination: return "Photos non supporta questa combinazione di risorse."; case .creationFailed: return "Photos non ha completato la creazione."; case .photoLibraryDenied: return "Accesso alla libreria Foto non autorizzato."; case .assetNotFound: return "Non riesco a trovare la Live Photo appena creata."; case .resourcesNotFound: return "Non riesco a trovare entrambe le risorse della Live Photo." } } }
 }
 
-private struct DocumentExportPicker: UIViewControllerRepresentable {
-    let url: URL
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController { UIDocumentPickerViewController(forExporting: [url], asCopy: true) }
+private struct ExportDocumentPicker: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController { UIDocumentPickerViewController(forExporting: [], asCopy: true) }
     func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
 }
 
@@ -136,7 +128,7 @@ private nonisolated enum PhotoKitTestHelper {
         return identifier
     }
     static nonisolated func exportResource(_ resource: PHAssetResource, to url: URL) async throws {
-        try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let options = PHAssetResourceRequestOptions()
             options.isNetworkAccessAllowed = true
             PHAssetResourceManager.default().writeData(for: resource, toFile: url, options: options) { error in
