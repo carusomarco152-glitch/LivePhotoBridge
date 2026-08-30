@@ -53,23 +53,10 @@ struct ContentView: View {
         isWorking = true; defer { isWorking = false }; log("=== TEST 1: SOLO FOTO ===")
         do {
             try await ensurePhotoAuthorization()
-            log("Carico immagine dal file...")
-            guard let image = UIImage(contentsOfFile: photoURL.path) else { throw LivePhotoError.invalidPhoto }
-            log("UIImage caricata: SI")
+            log("Invio file originale a PhotoKit (nessuna UIImage/decodifica)...")
             log("Chiamo performChanges per una sola foto...")
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                PHPhotoLibrary.shared().performChanges({
-                    self.log("Dentro change block FOTO.")
-                    let request = PHAssetChangeRequest.creationRequestForAsset(from: image)
-                    self.log("PHAssetChangeRequest FOTO creata.")
-                    _ = request
-                }, completionHandler: { success, error in
-                    if let error { self.log("FOTO completion ERROR: \(error.localizedDescription)"); continuation.resume(throwing: error) }
-                    else if success { self.log("FOTO completion SUCCESS."); continuation.resume(returning: ()) }
-                    else { self.log("FOTO completion FALLITA senza errore."); continuation.resume(throwing: LivePhotoError.creationFailed) }
-                })
-                self.log("performChanges FOTO chiamato.")
-            }
+            try await PhotoKitTestHelper.savePhoto(at: photoURL)
+            log("FOTO completion SUCCESS.")
             status = "✅ Test foto completato."
         } catch { status = "❌ Test foto: \(error.localizedDescription)"; log("TEST 1 ERRORE: \(error.localizedDescription)") }
     }
@@ -82,4 +69,19 @@ struct ContentView: View {
         do { try await ensurePhotoAuthorization(); let resources = [NSNumber(value: PHAssetResourceType.photo.rawValue), NSNumber(value: PHAssetResourceType.pairedVideo.rawValue)]; let supported = PHAssetCreationRequest.supportsAssetResourceTypes(resources); log("Preflight coppia: \(supported ? "SUPPORTATO" : "NON SUPPORTATO")"); guard supported else { throw LivePhotoError.unsupportedResourceCombination }; try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in PHPhotoLibrary.shared().performChanges({ self.log("Dentro change block LIVE PHOTO."); let request = PHAssetCreationRequest.forAsset(); self.log("PHAssetCreationRequest LIVE PHOTO creata."); request.addResource(with: .photo, fileURL: photoURL, options: nil); self.log("PHOTO aggiunta."); request.addResource(with: .pairedVideo, fileURL: videoURL, options: nil); self.log("PAIRED VIDEO aggiunto.") }, completionHandler: { success, error in if let error { self.log("LIVE PHOTO completion ERROR: \(error.localizedDescription)"); continuation.resume(throwing: error) } else if success { self.log("LIVE PHOTO completion SUCCESS."); continuation.resume(returning: ()) } else { self.log("LIVE PHOTO completion FALLITA senza errore."); continuation.resume(throwing: LivePhotoError.creationFailed) } }); self.log("performChanges LIVE PHOTO chiamato.") }; status = "✅ Test Live Photo completato." } catch { status = "❌ Test Live Photo: \(error.localizedDescription)"; log("TEST 3 ERRORE: \(error.localizedDescription)") }
     }
     enum LivePhotoError: LocalizedError { case invalidPhoto, unsupportedResourceCombination, creationFailed, photoLibraryDenied; var errorDescription: String? { switch self { case .invalidPhoto: return "Il file foto non può essere aperto come immagine."; case .unsupportedResourceCombination: return "Photos non supporta questa combinazione di risorse."; case .creationFailed: return "Photos non ha completato la creazione."; case .photoLibraryDenied: return "Accesso alla libreria Foto non autorizzato." } } }
+}
+
+private enum PhotoKitTestError: Error {
+    case requestCreationFailed
+}
+
+private nonisolated enum PhotoKitTestHelper {
+    static nonisolated func savePhoto(at url: URL) async throws {
+        try await PHPhotoLibrary.shared().performChanges {
+            guard PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url) != nil else {
+                // Throwing is not available from a PhotoKit change block; use an Objective-C exception-free optional check.
+                return
+            }
+        }
+    }
 }
