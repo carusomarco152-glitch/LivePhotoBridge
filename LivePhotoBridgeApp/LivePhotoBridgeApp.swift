@@ -22,24 +22,46 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
-                Image(systemName: "livephoto").font(.system(size: 64))
-                Text("Live Photo Bridge").font(.largeTitle.bold())
-                Text("Ricostruisce una Live Photo usando i file originali, senza ricodificare il video.")
-                    .multilineTextAlignment(.center).foregroundStyle(.secondary)
-                Button { importerKind = .photo; showFileImporter = true } label: {
-                    Label(photoURL == nil ? "Scegli foto HEIC/JPEG" : "Foto selezionata ✓", systemImage: "photo").frame(maxWidth: .infinity)
-                }.buttonStyle(.borderedProminent)
-                Button { importerKind = .video; showFileImporter = true } label: {
-                    Label(videoURL == nil ? "Scegli video MOV" : "Video selezionato ✓", systemImage: "video").frame(maxWidth: .infinity)
-                }.buttonStyle(.bordered)
-                Button { Task { await importLivePhoto() } } label: {
-                    if isWorking { ProgressView().frame(maxWidth: .infinity) }
-                    else { Label("Crea Live Photo", systemImage: "wand.and.stars").frame(maxWidth: .infinity) }
-                }.buttonStyle(.borderedProminent).disabled(photoURL == nil || videoURL == nil || isWorking)
-                Text(status).font(.footnote).multilineTextAlignment(.center).foregroundStyle(.secondary)
-                Spacer()
-            }.padding().navigationTitle("Live Photo Bridge")
+            ScrollView {
+                VStack(spacing: 16) {
+                    Image(systemName: "livephoto").font(.system(size: 64))
+                    Text("Live Photo Bridge").font(.largeTitle.bold())
+                    Text("Ricostruisce una Live Photo usando i file originali, senza ricodificare il video.")
+                        .multilineTextAlignment(.center).foregroundStyle(.secondary)
+                    Button { importerKind = .photo; showFileImporter = true } label: {
+                        Label(photoURL == nil ? "Scegli foto HEIC/JPEG" : "Foto selezionata ✓", systemImage: "photo").frame(maxWidth: .infinity)
+                    }.buttonStyle(.borderedProminent)
+                    Button { importerKind = .video; showFileImporter = true } label: {
+                        Label(videoURL == nil ? "Scegli video MOV" : "Video selezionato ✓", systemImage: "video").frame(maxWidth: .infinity)
+                    }.buttonStyle(.bordered)
+                    Button { Task { await importLivePhoto() } } label: {
+                        if isWorking { ProgressView().frame(maxWidth: .infinity) }
+                        else { Label("Crea Live Photo", systemImage: "wand.and.stars").frame(maxWidth: .infinity) }
+                    }.buttonStyle(.borderedProminent).disabled(photoURL == nil || videoURL == nil || isWorking)
+                    Text(status).font(.footnote).multilineTextAlignment(.center).foregroundStyle(.secondary)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Log diagnostico").font(.headline)
+                            Spacer()
+                            Button("Copia") {
+                                UIPasteboard.general.string = diagnosticLog
+                            }
+                            Button("Cancella") {
+                                diagnosticLog = ""
+                                UserDefaults.standard.removeObject(forKey: "LivePhotoBridge.log")
+                            }
+                        }
+                        TextEditor(text: $diagnosticLog)
+                            .font(.system(.footnote, design: .monospaced))
+                            .frame(minHeight: 220, maxHeight: 320)
+                            .padding(4)
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(.secondary.opacity(0.3)))
+                            .textSelection(.enabled)
+                    }
+                }.padding()
+            }
+            .navigationTitle("Live Photo Bridge")
             .fileImporter(isPresented: $showFileImporter, allowedContentTypes: importerKind == .photo ? [.heic, .jpeg] : [.movie], allowsMultipleSelection: false) { result in
                 handleImportedFile(result, kind: importerKind)
             }
