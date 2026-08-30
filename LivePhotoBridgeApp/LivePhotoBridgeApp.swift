@@ -89,7 +89,7 @@ struct ContentView: View {
             guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil).firstObject else { throw LivePhotoError.assetNotFound }
             let resources = PHAssetResource.assetResources(for: asset)
             guard let photoResource = resources.first(where: { $0.type == .photo }), let videoResource = resources.first(where: { $0.type == .pairedVideo }) else { throw LivePhotoError.resourcesNotFound }
-            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("LivePhotoBridge_Export_\(Date().formatted(.iso8601))", isDirectory: true)
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("LivePhotoBridge_Export_\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let photoOut = folder.appendingPathComponent("created_photo.heic")
             let videoOut = folder.appendingPathComponent("created_video.mov")
@@ -127,7 +127,7 @@ private nonisolated enum PhotoKitTestHelper {
         guard let identifier else { throw ContentView.LivePhotoError.creationFailed }
         return identifier
     }
-    static nonisolated func exportResource(_ resource: PHAssetResource, to url: URL) async throws {
+    @MainActor static func exportResource(_ resource: PHAssetResource, to url: URL) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let options = PHAssetResourceRequestOptions()
             options.isNetworkAccessAllowed = true
