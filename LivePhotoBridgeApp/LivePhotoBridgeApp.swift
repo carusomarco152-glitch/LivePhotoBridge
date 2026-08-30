@@ -1,9 +1,11 @@
 import SwiftUI
+import Combine
 import Photos
 import UniformTypeIdentifiers
 import ImageIO
 import AVFoundation
 import Network
+import Darwin
 
 @main
 struct LivePhotoBridgeApp: App {
@@ -17,7 +19,7 @@ final class TransferServer: ObservableObject {
     @Published private(set) var logText = ""
 
     private var listener: NWListener?
-    private var port: NWEndpoint.Port = 8080
+    private let port: NWEndpoint.Port = 8080
     private let fileManager = FileManager.default
     let inbox: URL
 
@@ -28,12 +30,9 @@ final class TransferServer: ObservableObject {
 
     func start() {
         guard listener == nil else { return }
-        do {
-            listener = try NWListener(using: .tcp, on: port)
-        } catch {
-            appendLog("ERROR server: \(error.localizedDescription)")
-            return
-        }
+        do { listener = try NWListener(using: .tcp, on: port) }
+        catch { appendLog("ERROR server: \(error.localizedDescription)"); return }
+
         listener?.stateUpdateHandler = { [weak self] state in
             Task { @MainActor in
                 guard let self else { return }
@@ -45,8 +44,7 @@ final class TransferServer: ObservableObject {
                 case .failed(let error):
                     self.isRunning = false
                     self.appendLog("ERROR server: \(error.localizedDescription)")
-                    self.listener?.cancel()
-                    self.listener = nil
+                    self.listener?.cancel(); self.listener = nil
                 case .cancelled:
                     self.isRunning = false
                 default: break
@@ -55,7 +53,8 @@ final class TransferServer: ObservableObject {
         }
         listener?.newConnectionHandler = { [weak self] connection in
             connection.start(queue: .global(qos: .userInitiated))
-            HTTPConnection(connection: connection, inbox: self?.inbox ?? FileManager.default.temporaryDirectory) { message in
+            let inbox = self?.inbox ?? FileManager.default.temporaryDirectory
+            HTTPConnection(connection: connection, inbox: inbox) { message in
                 Task { @MainActor in self?.appendLog(message) }
             }.start()
         }
@@ -63,10 +62,7 @@ final class TransferServer: ObservableObject {
     }
 
     func stop() {
-        listener?.cancel()
-        listener = nil
-        isRunning = false
-        address = ""
+        listener?.cancel(); listener = nil; isRunning = false; address = ""
     }
 
     func clearInbox() {
@@ -87,7 +83,7 @@ struct ContentView: View {
     @State private var videoURL: URL?
     @State private var showFileImporter = false
     @State private var importerKind: ImportedKind = .photo
-    @State private var status = "Seleziona i file per i test oppure collega il PC dal browser."
+    @State private var status = "Apri l'indirizzo mostrato dal PC per iniziare."
     @State private var isWorking = false
     @State private var diagnosticLog = UserDefaults.standard.string(forKey: "LivePhotoBridge.log") ?? ""
     @State private var createdLivePhotoIdentifier: String?
@@ -101,18 +97,19 @@ struct ContentView: View {
                 VStack(spacing: 16) {
                     Image(systemName: "livephoto").font(.system(size: 64))
                     Text("Live Photo Bridge").font(.largeTitle.bold())
-                    Text("Trasferimento PC → iPhone e test controllati senza ricodifica.")
+                    Text("PC → browser → iPhone. I file restano sul PC finché non confermi il trasferimento.")
                         .multilineTextAlignment(.center).foregroundStyle(.secondary)
 
-                    GroupBox("PC → iPhone") {
+                    GroupBox("Trasferimento dal PC") {
                         VStack(alignment: .leading, spacing: 10) {
                             if server.isRunning {
-                                Text("Apri dal PC:").font(.headline)
+                                Label("Server attivo", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                                Text("Sul PC apri:").font(.headline)
                                 Text(server.address).font(.system(.body, design: .monospaced)).textSelection(.enabled)
-                                Text("Seleziona file o cartella dal browser. La prima classificazione avviene sul PC, prima dell'invio.")
+                                Text("Nel browser selezionerai file o un'intera cartella. La classificazione iniziale avviene sul PC, prima dell'upload.")
                                     .font(.footnote).foregroundStyle(.secondary)
                                 HStack {
-                                    Button("Riavvia server") { server.stop(); server.start() }
+                                    Button("Riavvia") { server.stop(); server.start() }
                                     Button("Svuota inbox") { server.clearInbox() }
                                 }
                             } else {
@@ -120,25 +117,20 @@ struct ContentView: View {
                                     Label("Avvia interfaccia PC", systemImage: "desktopcomputer")
                                         .frame(maxWidth: .infinity)
                                 }.buttonStyle(.borderedProminent)
-                                Text("Il browser del PC analizzerà localmente estensioni, nomi e gruppi; l'iPhone riceverà solo ciò che confermi.")
-                                    .font(.footnote).foregroundStyle(.secondary)
                             }
                         }
                     }
+
+                    Text(status).font(.footnote).multilineTextAlignment(.center).foregroundStyle(.secondary)
 
                     Divider()
                     Text("Test PhotoKit locali").font(.headline)
                     Button { importerKind = .photo; showFileImporter = true } label: { Label(photoURL == nil ? "Scegli foto HEIC/JPEG" : "Foto selezionata ✓", systemImage: "photo").frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent)
                     Button { importerKind = .video; showFileImporter = true } label: { Label(videoURL == nil ? "Scegli video MOV" : "Video selezionato ✓", systemImage: "video").frame(maxWidth: .infinity) }.buttonStyle(.bordered)
-                    Text("Test 1 – Solo foto").font(.headline)
-                    Button { Task { await testPhotoOnly() } } label: { Label("Importa solo foto", systemImage: "photo.badge.plus").frame(maxWidth: .infinity) }.buttonStyle(.bordered)
-                    Text("Test 2 – Solo video").font(.headline)
-                    Button { Task { await testVideoOnly() } } label: { Label("Importa solo video", systemImage: "video.badge.plus").frame(maxWidth: .infinity) }.buttonStyle(.bordered)
-                    Text("Test 3 – Live Photo").font(.headline)
-                    Button { Task { await testLivePhotoPair() } } label: { Label("Importa coppia HEIC + MOV", systemImage: "livephoto.badge.automatic").frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent)
+                    Button { Task { await testPhotoOnly() } } label: { Label("Test 1 – importa solo foto", systemImage: "photo.badge.plus").frame(maxWidth: .infinity) }.buttonStyle(.bordered)
+                    Button { Task { await testVideoOnly() } } label: { Label("Test 2 – importa solo video", systemImage: "video.badge.plus").frame(maxWidth: .infinity) }.buttonStyle(.bordered)
+                    Button { Task { await testLivePhotoPair() } } label: { Label("Test 3 – importa Live Photo", systemImage: "livephoto.badge.automatic").frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent)
                     Button { Task { await exportCreatedLivePhotoResources() } } label: { Label("Esporta risorse Live Photo", systemImage: "square.and.arrow.down").frame(maxWidth: .infinity) }.buttonStyle(.bordered).disabled(createdLivePhotoIdentifier == nil || isWorking)
-                    Text(createdLivePhotoIdentifier == nil ? "Il pulsante si abilita dopo aver creato una Live Photo con il Test 3." : "Live Photo pronta: puoi esportarne le due risorse originali.").font(.footnote).multilineTextAlignment(.center).foregroundStyle(.secondary)
-                    Text(status).font(.footnote).multilineTextAlignment(.center).foregroundStyle(.secondary)
 
                     VStack(alignment: .leading, spacing: 8) {
                         HStack { Text("Log app").font(.headline); Spacer(); Button("Copia") { UIPasteboard.general.string = diagnosticLog }; Button("Cancella") { diagnosticLog = ""; UserDefaults.standard.removeObject(forKey: "LivePhotoBridge.log") } }
@@ -151,7 +143,8 @@ struct ContentView: View {
                         }
                     }
                 }.padding()
-            }.navigationTitle("Live Photo Bridge")
+            }
+            .navigationTitle("Live Photo Bridge")
             .onAppear { server.start() }
             .onDisappear { server.stop() }
             .fileImporter(isPresented: $showFileImporter, allowedContentTypes: importerKind == .photo ? [.heic, .jpeg] : [.movie], allowsMultipleSelection: false) { result in handleImportedFile(result, kind: importerKind) }
@@ -191,7 +184,7 @@ struct ContentView: View {
     private func testPhotoOnly() async {
         guard let photoURL else { status = "Seleziona prima l'HEIC/JPEG."; return }
         isWorking = true; defer { isWorking = false }; log("=== TEST 1: SOLO FOTO ===")
-        do { try await ensurePhotoAuthorization(); log("Invio file originale a PhotoKit (nessuna UIImage/decodifica)..."); log("Chiamo performChanges per una sola foto..."); try await PhotoKitTestHelper.savePhoto(at: photoURL); log("FOTO completion SUCCESS."); status = "✅ Test foto completato." }
+        do { try await ensurePhotoAuthorization(); log("Invio file originale a PhotoKit (nessuna UIImage/decodifica)..."); try await PhotoKitTestHelper.savePhoto(at: photoURL); log("FOTO completion SUCCESS."); status = "✅ Test foto completato." }
         catch { status = "❌ Test foto: \(error.localizedDescription)"; log("TEST 1 ERRORE: \(error.localizedDescription)") }
     }
 
@@ -214,7 +207,7 @@ struct ContentView: View {
             let identifier = try await PhotoKitTestHelper.saveLivePhoto(photoURL: photoURL, videoURL: videoURL)
             createdLivePhotoIdentifier = identifier
             log("LIVE PHOTO completion SUCCESS. Asset: \(identifier)")
-            status = "✅ Test Live Photo completato. Ora puoi esportare le risorse."
+            status = "✅ Test Live Photo completato."
         } catch { status = "❌ Test Live Photo: \(error.localizedDescription)"; log("TEST 3 ERRORE: \(error.localizedDescription)") }
     }
 
@@ -291,24 +284,23 @@ private nonisolated enum PhotoKitTestHelper {
 
 private enum LocalNetworkInfo {
     static func ipv4Address() -> String? {
-        var address: String?
+        var result: String?
         var interfaces: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&interfaces) == 0, let first = interfaces else { return nil }
-        defer { freeifaddrs(interfaces) }
-        var pointer: UnsafeMutablePointer<ifaddrs>? = first
+        guard getifaddrs(&interfaces) == 0 else { return nil }
+        defer { if let interfaces { freeifaddrs(interfaces) } }
+        var pointer = interfaces
         while let current = pointer {
             let flags = Int32(current.pointee.ifa_flags)
-            let isUp = (flags & IFF_UP) != 0
-            let isLoopback = (flags & IFF_LOOPBACK) != 0
-            if isUp && !isLoopback, let addr = current.pointee.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET) {
+            if (flags & IFF_UP) != 0, (flags & IFF_LOOPBACK) == 0,
+               let addr = current.pointee.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET) {
                 var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
                 getnameinfo(addr, socklen_t(addr.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
-                address = String(cString: host)
-                if address != nil { break }
+                result = String(cString: host)
+                if result != nil { break }
             }
             pointer = current.pointee.ifa_next
         }
-        return address
+        return result
     }
 }
 
@@ -317,12 +309,14 @@ private final class HTTPConnection: @unchecked Sendable {
     private let inbox: URL
     private let log: (String) -> Void
     private var buffer = Data()
-    private var expectedBody = 0
     private var headersParsed = false
-    private var requestPath = ""
-    private var requestHeaders: [String: String] = [:]
+    private var method = ""
+    private var path = ""
+    private var headers: [String: String] = [:]
+    private var expectedBody = 0
     private var bodyFile: URL?
     private var bodyHandle: FileHandle?
+    private var finished = false
 
     init(connection: NWConnection, inbox: URL, log: @escaping (String) -> Void) {
         self.connection = connection; self.inbox = inbox; self.log = log
@@ -332,7 +326,7 @@ private final class HTTPConnection: @unchecked Sendable {
 
     private func receive() {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
-            guard let self else { return }
+            guard let self, !self.finished else { return }
             if let data, !data.isEmpty { self.consume(data) }
             if let error { self.log("ERROR rete: \(error.localizedDescription)"); self.finish(); return }
             if isComplete { self.finish(); return }
@@ -341,75 +335,112 @@ private final class HTTPConnection: @unchecked Sendable {
     }
 
     private func consume(_ data: Data) {
-        if !headersParsed {
-            buffer.append(data)
-            guard let range = buffer.range(of: Data([13, 10, 13, 10])) else { return }
-            let headerData = buffer.subdata(in: 0..<range.lowerBound)
-            let bodyStart = range.upperBound
-            parseHeaders(headerData)
-            headersParsed = true
-            buffer.removeSubrange(0..<bodyStart)
-            if expectedBody > 0 { prepareBodyFile() }
-        } else {
-            buffer.append(data)
-        }
-        drainBodyIfPossible()
+        if !headersParsed { buffer.append(data); parseHeaderIfReady() }
+        else { buffer.append(data) }
+        drainBody()
     }
 
-    private func parseHeaders(_ data: Data) {
-        let text = String(data: data, encoding: .utf8) ?? ""
+    private func parseHeaderIfReady() {
+        guard let range = buffer.range(of: Data([13, 10, 13, 10])) else { return }
+        let headerData = buffer.subdata(in: 0..<range.lowerBound)
+        let remainder = buffer.subdata(in: range.upperBound..<buffer.count)
+        buffer = remainder
+        let text = String(data: headerData, encoding: .utf8) ?? ""
         let lines = text.components(separatedBy: "\r\n")
         if let first = lines.first {
             let parts = first.split(separator: " ", maxSplits: 2).map(String.init)
-            if parts.count >= 2 { requestPath = parts[1] }
+            if parts.count >= 2 { method = parts[0]; path = parts[1] }
         }
         for line in lines.dropFirst() {
             let parts = line.split(separator: ":", maxSplits: 1).map(String.init)
-            if parts.count == 2 { requestHeaders[parts[0].lowercased()] = parts[1].trimmingCharacters(in: .whitespaces) }
+            if parts.count == 2 { headers[parts[0].lowercased()] = parts[1].trimmingCharacters(in: .whitespaces) }
         }
-        expectedBody = Int(requestHeaders["content-length"] ?? "0") ?? 0
+        headersParsed = true
+        expectedBody = Int(headers["content-length"] ?? "0") ?? 0
+        if method == "GET" {
+            sendHTML(PCWebUI.pageHTML)
+            return
+        }
+        if method != "POST" && method != "PUT" { sendText("Metodo non supportato", status: "405 Method Not Allowed"); return }
+        if expectedBody > 0 { prepareBodyFile() }
     }
 
     private func prepareBodyFile() {
-        let rawName = requestHeaders["x-lpb-filename"] ?? "upload.bin"
+        let rawName = headers["x-lpb-filename"] ?? "upload.bin"
         let name = sanitize(rawName)
         let destination = inbox.appendingPathComponent("\(UUID().uuidString)_\(name)")
         bodyFile = destination
-        fileManagerCreate(destination)
+        FileManager.default.createFile(atPath: destination.path, contents: nil)
         bodyHandle = try? FileHandle(forWritingTo: destination)
         log("Upload avviato: \(name) (\(expectedBody) byte)")
     }
 
-    private func drainBodyIfPossible() {
-        guard expectedBody >= 0 else { return }
-        let needed = min(buffer.count, expectedBody)
-        if needed > 0 {
-            if let chunk = bodyHandle { try? chunk.write(contentsOf: buffer.prefix(needed)) }
-            buffer.removeFirst(needed)
-            expectedBody -= needed
+    private func drainBody() {
+        guard headersParsed, expectedBody >= 0, method != "GET" else { return }
+        let count = min(buffer.count, expectedBody)
+        if count > 0 {
+            if let bodyHandle { try? bodyHandle.write(contentsOf: buffer.prefix(count)) }
+            buffer.removeFirst(count)
+            expectedBody -= count
         }
-        if expectedBody == 0 && headersParsed {
+        if expectedBody == 0 && !finished {
             bodyHandle?.closeFile(); bodyHandle = nil
-            let name = requestHeaders["x-lpb-filename"] ?? "upload.bin"
-            log("Upload completato: \(name)")
-            sendJSON("{\"ok\":true}")
-            expectedBody = -1
+            let name = headers["x-lpb-filename"] ?? "upload.bin"
+            let category = headers["x-lpb-category"] ?? "unknown"
+            let group = headers["x-lpb-group"] ?? ""
+            let aae = headers["x-lpb-aae"] ?? "false"
+            log("Upload completato: \(name) | categoria=\(category) | gruppo=\(group) | AAE=\(aae)")
+            sendText("{\"ok\":true}", contentType: "application/json")
         }
     }
 
-    private func sendJSON(_ body: String) {
-        let bytes = Data(body.utf8)
-        var response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \(bytes.count)\r\nConnection: close\r\n\r\n".data(using: .utf8) ?? Data()
-        response.append(bytes)
+    private func sendHTML(_ html: String) {
+        let data = Data(html.utf8)
+        sendRaw(data, contentType: "text/html; charset=utf-8", status: "200 OK")
+    }
+
+    private func sendText(_ text: String, status: String = "200 OK", contentType: String = "text/plain; charset=utf-8") {
+        sendRaw(Data(text.utf8), contentType: contentType, status: status)
+    }
+
+    private func sendRaw(_ body: Data, contentType: String, status: String) {
+        guard !finished else { return }
+        var response = Data("HTTP/1.1 \(status)\r\nContent-Type: \(contentType)\r\nContent-Length: \(body.count)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n".utf8)
+        response.append(body)
         connection.send(content: response, completion: .contentProcessed { [weak self] _ in self?.finish() })
     }
 
-    private func finish() { bodyHandle?.closeFile(); bodyHandle = nil; connection.cancel() }
+    private func finish() { guard !finished else { return }; finished = true; bodyHandle?.closeFile(); bodyHandle = nil; connection.cancel() }
 
     private func sanitize(_ name: String) -> String {
         let decoded = name.removingPercentEncoding ?? name
         return decoded.replacingOccurrences(of: "..", with: "_").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "\\", with: "_")
     }
+}
 
-    private func fileManagerCreate(_ url: URL) { FileManager.default.createFile(atPath: url.path, contents: nil) }
+private enum PCWebUI {
+    static let pageHTML = #"""
+<!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Live Photo Bridge</title>
+<style>body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#f5f5f7;margin:0;color:#111}main{max-width:1000px;margin:30px auto;padding:20px}h1{margin-bottom:4px}.muted{color:#666}.card{background:white;border-radius:16px;padding:18px;margin:16px 0;box-shadow:0 2px 12px #0001}.actions{display:flex;gap:10px;flex-wrap:wrap}button{border:0;border-radius:10px;padding:11px 15px;font-weight:600;cursor:pointer}button.primary{background:#111;color:white}input[type=file]{display:none}.pick{display:inline-block;background:#111;color:#fff;border-radius:10px;padding:11px 15px;cursor:pointer}.group{border:1px solid #ddd;border-radius:12px;padding:12px;margin:9px 0}.row{display:flex;align-items:center;justify-content:space-between;gap:10px}.tag{display:inline-block;background:#eee;border-radius:8px;padding:3px 7px;font-size:12px;margin-right:5px}.ok{color:#087f23}.warn{color:#9a6500}pre{white-space:pre-wrap;background:#111;color:#ddd;padding:14px;border-radius:12px;min-height:120px}.aaebox{margin-top:8px}.small{font-size:13px}</style></head>
+<body><main><h1>Live Photo Bridge</h1><div class="muted">Selezione e classificazione avvengono sul PC. L'iPhone riceve solo ciò che confermi.</div>
+<div class="card"><div class="actions"><label class="pick">Seleziona file<input id="files" type="file" multiple></label><label class="pick">Seleziona cartella<input id="folder" type="file" multiple webkitdirectory directory></label><button onclick="clearAll()">Azzera</button></div><p id="summary" class="muted">Nessun file selezionato.</p></div>
+<div class="card"><h2>File classificati</h2><div id="groups">Seleziona una cartella o dei file.</div></div>
+<div class="card"><h2>Trasferimento</h2><p class="small">AAE: puoi includerlo o escluderlo per ogni gruppo. In questa fase l'AAE viene trasferito come sidecar originale nell'inbox dell'app; non viene ancora applicato/ricodificato.</p><div class="actions"><button class="primary" onclick="uploadAll()">Trasferisci selezione su iPhone</button></div><p id="progress"></p></div>
+<div class="card"><h2>Log PC</h2><pre id="log"></pre></div></main>
+<script>
+const state={files:[],groups:[]};
+const $=id=>document.getElementById(id);
+function esc(s){return s.replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));}
+function base(name){return name.replace(/\.[^.]+$/,'').toLowerCase();}
+function ext(name){let m=name.toLowerCase().match(/\.([^.]+)$/);return m?m[1]:'';}
+function classify(g){let ex=g.files.map(f=>ext(f.name)); if(ex.includes('heic')&&ex.includes('mov'))return 'LIVE PHOTO'; if(ex.includes('heic')||ex.includes('jpg')||ex.includes('jpeg')||ex.includes('png')||ex.includes('webp')||ex.includes('gif'))return 'FOTO'; if(ex.includes('mov')||ex.includes('mp4'))return 'VIDEO'; return 'NON CLASSIFICATO';}
+function log(s){$('log').textContent+='['+new Date().toLocaleTimeString()+'] '+s+'\n';}
+function ingest(list){state.files=Array.from(list);const map=new Map();for(const f of state.files){const b=base(f.name);if(!map.has(b))map.set(b,[]);map.get(b).push(f)}state.groups=Array.from(map,([key,files])=>({key,files,type:classify({files}),includeAAE:true}));render();log('Rilevati '+state.files.length+' file in '+state.groups.length+' gruppi.');}
+function render(){let html='';for(let i=0;i<state.groups.length;i++){const g=state.groups[i];let ex=g.files.map(f=>ext(f.name));let aae=g.files.find(f=>ext(f.name)==='aae');html+=`<div class="group"><div class="row"><div><b>${esc(g.key)}</b><div>${g.type} <span class="tag">${g.files.length} file</span>${aae?'<span class="tag">AAE</span>':''}</div></div><div>${aae?`<label class="aaebox"><input type="checkbox" ${g.includeAAE?'checked':''} onchange="state.groups[${i}].includeAAE=this.checked"> Includi AAE</label>`:''}</div></div><div class="small muted">${g.files.map(f=>esc(f.name)).join(' · ')}</div></div>`} $('groups').innerHTML=html||'Nessun file.';$('summary').textContent=state.files.length+' file · '+state.groups.length+' gruppi · '+state.groups.filter(g=>g.files.some(f=>ext(f.name)==='aae')).length+' gruppi con AAE';}
+function clearAll(){state.files=[];state.groups=[];$('groups').textContent='Seleziona una cartella o dei file.';$('summary').textContent='Nessun file selezionato.';$('progress').textContent='';log('Selezione azzerata.');}
+$('files').onchange=e=>ingest(e.target.files);$('folder').onchange=e=>ingest(e.target.files);
+async function uploadOne(f,g,includeAAE){let h={'Content-Type':f.type||'application/octet-stream','Content-Length':String(f.size),'X-LPB-Filename':encodeURIComponent(f.name),'X-LPB-Category':encodeURIComponent(g.type),'X-LPB-Group':encodeURIComponent(g.key),'X-LPB-AAE':includeAAE?'true':'false'};let r=await fetch('/upload',{method:'POST',headers:h,body:f});if(!r.ok)throw new Error(f.name+' HTTP '+r.status);}
+async function uploadAll(){let todo=[];for(const g of state.groups){for(const f of g.files){if(ext(f.name)==='aae'&&!g.includeAAE)continue;todo.push({f,g,includeAAE:g.includeAAE})}}$('progress').textContent='Trasferimento 0/'+todo.length;log('Avvio trasferimento di '+todo.length+' file.');let n=0;for(const x of todo){try{await uploadOne(x.f,x.g,x.includeAAE);n++;$('progress').textContent='Trasferimento '+n+'/'+todo.length;log('OK '+x.f.name+' → iPhone inbox');}catch(e){log('ERRORE '+e.message);}}log('Trasferimento terminato: '+n+'/'+todo.length+' riusciti.');}
+</script></body></html>
+"""
 }
